@@ -3,7 +3,7 @@
 //! Unlike the characterisation tests (`tests/lab/`), which describe what upstream does, these
 //! are requirements: every combination must meet them, upstream ↔ upstream, upstream sender →
 //! our receiver, our sender → upstream receiver and Rust ↔ Rust. Limits come from measured
-//! runs of all four (2026-11-12) with some slack, so they catch regressions, not noise.
+//! runs of all four (two campaigns, 2026-11-12) with some slack, so they catch regressions, not noise.
 //!
 //! Counted once the stream has started (the first frames sent before the SRT connection is up
 //! are reported apart, and bounded) and until it ends.
@@ -13,9 +13,9 @@ use std::path::PathBuf;
 use packet_capture::{FrameCheck, LabRun};
 
 const CAPTURES_DIR: &str = "../../.cache/srtla-captures";
-/// One GOP and a half (`-g 60` at 30 fps): the SRT handshake through the bonding may cost the
-/// first GOP, never more.
-const MAX_LATE_START_FRAMES: usize = 90;
+/// The lab starts the encoder once SRT is connected: no frame may be sent before. Only
+/// `cold-start` and `group-limit` start it early, on purpose, and they are not listed here.
+const MAX_LATE_START_FRAMES: usize = 0;
 /// What the SRT listener may still be holding when the lab stops everything.
 const MAX_CUT_FRAMES: usize = 45;
 
@@ -36,8 +36,10 @@ const fn limit(scenario: &'static str, max_damaged: usize, max_gap_ms: i64) -> L
     }
 }
 
-/// No damage measured in any combination: two frames of slack.
-const CLEAN: (usize, i64) = (2, 100);
+/// Healthy or impaired links that bonding and SRT fully hide. Over two campaigns of all four
+/// combinations (2026-11-12) they lost 0–6 frames, at most 132 ms, upstream ↔ upstream
+/// `steady` included: SRT dropping a late packet on a loaded host, not the bonding.
+const CLEAN: (usize, i64) = (10, 250);
 
 const LIMITS: &[Limit] = &[
     // 2 and 4 healthy links.

@@ -92,13 +92,23 @@ reload_sender_links() {
 	mark "sender $sender reloaded with links $*"
 }
 
-# start_stream <sender> <seconds>: test pattern → SRT caller → sender. The encoder also keeps
-# what it sent in <scenario>.sent.<sender>.ts, to check the received video frame by frame.
+# start_stream <sender> <seconds> [now]: test pattern → SRT caller → sender. The encoder starts
+# once the SRT caller is connected, so the run does not depend on how fast the handshake was:
+# bytes sent before that are dropped, and with them the first keyframe and its whole GOP. `now`
+# starts it at once, for scenarios about video lost before the connection (cold-start).
+# The encoder also keeps what it sent in <scenario>.sent.<sender>.ts, to check the received
+# video frame by frame.
 start_stream() {
-	local sender=$1 seconds=$2
-	in_box srt-live-transmit -q "udp://127.0.0.1:$((7000 + sender))" \
+	local sender=$1 seconds=$2 when=${3:-connected}
+	local caller_log="$OUT/$SCENARIO.srt-caller.$sender.log"
+	local connections
+	connections=$(srt_connections "$caller_log")
+	in_box srt-live-transmit "udp://127.0.0.1:$((7000 + sender))" \
 		"srt://127.0.0.1:$((6000 + sender))?latency=$SRT_LATENCY_MS" \
-		2>> "$OUT/$SCENARIO.srt-caller.$sender.log" &
+		>> "$caller_log" 2>&1 &
+	if [ "$when" = connected ]; then
+		wait_for_srt_connection "$caller_log" "$connections" "$sender"
+	fi
 	in_box ffmpeg -loglevel error -re -f lavfi -i "testsrc2=size=1280x720:rate=30" \
 		-f lavfi -i "sine=frequency=440" -t "$seconds" \
 		-c:v libx264 -preset ultrafast -tune zerolatency \
@@ -107,6 +117,30 @@ start_stream() {
 		"[f=mpegts]udp://127.0.0.1:$((7000 + sender))?pkt_size=1316|[f=mpegts]$OUT/$SCENARIO.sent.$sender.ts" \
 		2>> "$OUT/$SCENARIO.ffmpeg.log" &
 	mark "stream $sender started at $BITRATE for ${seconds}s"
+}
+
+readonly SRT_CONNECTED="SRT target connected"
+readonly SRT_CONNECT_TIMEOUT_TENTHS=100
+
+# srt_connections <log>: how many times an SRT caller logged a connection.
+srt_connections() {
+	local count
+	count=$(grep -c "$SRT_CONNECTED" "$1" 2> /dev/null || true)
+	echo "${count:-0}"
+}
+
+# wait_for_srt_connection <log> <connections before> <sender>: up to 10 s for one more.
+wait_for_srt_connection() {
+	local log=$1 before=${2:-0} sender=$3 tenths=0
+	while [ "$(srt_connections "$log")" -le "$before" ]; do
+		if [ "$tenths" -ge "$SRT_CONNECT_TIMEOUT_TENTHS" ]; then
+			mark "SRT caller $sender not connected after 10 s, encoder started anyway"
+			return
+		fi
+		sleep 0.1
+		tenths=$((tenths + 1))
+	done
+	mark "SRT caller $sender connected"
 }
 
 # start_all <seconds> <k…>: SRT listener, receiver, sender 1 on the given links, stream.

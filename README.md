@@ -12,7 +12,7 @@ Milestone **M1, link bonding in Rust with SRTLA compatibility**: step 5 of 6 is 
 - ✅ **Wire format** (`bonding-protocol`): every packet, encode + decode, fuzzed, zero allocation.
 - ✅ **Receiver** (`bonding-receiver`): drop-in for `srtla_rec`. Upstream sender → our receiver passes the 40 characterisation tests.
 - ✅ **Sender** (`bonding-sender`): drop-in for `srtla_send`, link selection as a pure state machine. Our sender → upstream receiver passes the same 40 tests; Rust ↔ Rust works on localhost.
-- ✅ **End-to-end**: a real SRT stream through 2–4 links under `tc netem`, checked frame by frame. All four combinations (upstream ↔ upstream, both interop directions, Rust ↔ Rust) meet the same per-scenario limits in CI. Loss, jitter and bufferbloat cost no frame; a dying link costs at most a few.
+- ✅ **End-to-end**: a real SRT stream through 2–4 links under `tc netem`, checked frame by frame. All four combinations (upstream ↔ upstream, both interop directions, Rust ↔ Rust) meet the same per-scenario limits in CI. Loss, jitter and bufferbloat are fully hidden; a dying link costs at most a few frames, as upstream.
 - ⏭️ **Next**: bench against upstream and `irlserver/srtla_send`: throughput, CPU, memory, recovery time after a link drop.
 - Later: our own transport (M1b), own server, bench hardware, encoder, agent, OS image, enclosure. See [`docs/technical/roadmap.md`](docs/technical/roadmap.md).
 

@@ -11,6 +11,6 @@ run() {
 	wait "${senders[@]}"
 	mark "200 fake groups registered"
 	start_sender 1 1
-	start_stream 1 30
+	start_stream 1 30 now
 	sleep 33
 }

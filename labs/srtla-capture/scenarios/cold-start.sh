@@ -3,7 +3,7 @@ LINKS=2
 run() {
 	start_srt_listener
 	start_sender 1 1 2
-	start_stream 1 30
+	start_stream 1 30 now
 	sleep 6
 	start_receiver
 	sleep 27

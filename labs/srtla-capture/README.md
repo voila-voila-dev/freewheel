@@ -84,7 +84,7 @@ the received video `.ts`, what was sent `.sent.<k>.ts`, the frame digests `.fram
 
 ### End-to-end, frame by frame
 
-The encoder also writes what it sends to `<scenario>.sent.1.ts`. At the end of a run, both it and
+The encoder starts once the SRT caller is connected (except in `cold-start` and `group-limit`, which are about video lost before), so a slow handshake does not cost the first GOP. It also writes what it sends to `<scenario>.sent.1.ts`. At the end of a run, both it and
 the received `<scenario>.ts` are hashed per compressed video frame (`ffmpeg -copyts -c copy -f
 framemd5` → `.sent.1.frames`, `.received.frames`), and `FrameCheck` compares them by timestamp:
 intact, damaged (arrived different or not at all), late start (before the SRT connection was up)
