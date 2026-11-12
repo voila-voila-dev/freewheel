@@ -1,0 +1,8 @@
+{
+	"name": "@freewheel/typescript-config",
+	"private": true,
+	"description": "Shared TypeScript base configuration.",
+	"files": [
+		"base.json"
+	]
+}

@@ -1,0 +1,28 @@
+{
+	"name": "@freewheel/domain",
+	"description": "Domain layer for freewheel: pure model, DDD and hexagonal architecture with Effect",
+	"private": true,
+	"type": "module",
+	"imports": {
+		"#*": "./src/*"
+	},
+	"exports": {
+		"./telemetry/aggregates/*": "./src/telemetry/aggregates/*.ts",
+		"./telemetry/value-objects/*": "./src/telemetry/value-objects/*.ts",
+		"./connectivity/aggregates/*": "./src/connectivity/aggregates/*.ts",
+		"./connectivity/value-objects/*": "./src/connectivity/value-objects/*.ts"
+	},
+	"scripts": {
+		"check": "biome check",
+		"check-types": "tsc --noEmit",
+		"test": "bun test"
+	},
+	"dependencies": {
+		"effect": "catalog:effect"
+	},
+	"devDependencies": {
+		"@freewheel/typescript-config": "workspace:*",
+		"@types/bun": "catalog:",
+		"typescript": "catalog:"
+	}
+}

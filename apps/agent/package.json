@@ -1,0 +1,25 @@
+{
+	"name": "@freewheel/agent",
+	"description": "On-board agent: network, modems, live supervisor, telemetry, tunnel, control API",
+	"private": true,
+	"type": "module",
+	"imports": {
+		"#*": "./src/*"
+	},
+	"scripts": {
+		"build": "bun build --compile --target=bun-linux-arm64 --outfile dist/freewheel-agent src/index.ts",
+		"check": "biome check",
+		"check-types": "tsc --noEmit",
+		"dev": "bun --watch src/index.ts"
+	},
+	"dependencies": {
+		"@effect/platform-bun": "catalog:effect",
+		"@freewheel/domain": "workspace:*",
+		"effect": "catalog:effect"
+	},
+	"devDependencies": {
+		"@freewheel/typescript-config": "workspace:*",
+		"@types/bun": "catalog:",
+		"typescript": "catalog:"
+	}
+}

@@ -1,0 +1,14 @@
+{
+	"updated": "2026-11-11",
+	"metrics": {
+		"size.agent.bytes": 109300728,
+		"size.binary.hot-paths.bytes": 425496,
+		"size.crate.bitrate_control.bytes": 0,
+		"size.crate.bonding_protocol.bytes": 1508,
+		"size.hot-path.bitrate_clamp.bytes": 132,
+		"size.hot-path.receiver_forward.bytes": 2160,
+		"size.hot-path.sender_forward.bytes": 3196,
+		"size.hot-path.srtla_classify.bytes": 460,
+		"size.hot-path.srtla_decode.bytes": 384
+	}
+}

@@ -1,0 +1,21 @@
+[package]
+name = "bonding-receiver"
+description = "Bonding receiver: gathers each sender's links into one stream for the SRT listener"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "bonding-receiver"
+path = "src/main.rs"
+
+[dependencies]
+bonding-protocol = { path = "../bonding-protocol" }
+net-sys = { path = "../net-sys" }
+
+[dev-dependencies]
+alloc-counter = { path = "../alloc-counter" }
+
+[lints]
+workspace = true

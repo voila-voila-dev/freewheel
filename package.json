@@ -1,0 +1,46 @@
+{
+	"name": "freewheel",
+	"private": true,
+	"type": "module",
+	"license": "MIT",
+	"packageManager": "bun@1.4.4",
+	"workspaces": {
+		"packages": [
+			"apps/*",
+			"packages/*",
+			"scripts/*"
+		],
+		"catalog": {
+			"@biomejs/biome": "2.5.15",
+			"@types/bun": "1.4.3",
+			"typescript": "7.0.2",
+			"vite": "8.3.4",
+			"@vitejs/plugin-react": "^6.1.2",
+			"@tanstack/react-router": "^1.170.42",
+			"@types/react": "^19.3.0",
+			"@types/react-dom": "^19.3.0"
+		},
+		"catalogs": {
+			"effect": {
+				"effect": "4.0.3",
+				"@effect/platform-bun": "4.0.3"
+			},
+			"react": {
+				"react": "19.2.6",
+				"react-dom": "19.2.6"
+			}
+		}
+	},
+	"scripts": {
+		"check": "biome check",
+		"check-types": "bun run --filter '*' check-types",
+		"test": "bun run --filter '*' test && cargo test --workspace",
+		"agent:build": "bun run --filter @freewheel/agent build",
+		"web:dev": "bun run --filter @freewheel/web dev",
+		"traces:fetch": "bun run --filter @freewheel/fetch-traces start",
+		"bench": "bun scripts/bench/src/index.ts"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "catalog:"
+	}
+}

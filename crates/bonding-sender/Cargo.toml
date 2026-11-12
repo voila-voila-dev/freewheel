@@ -1,0 +1,22 @@
+[package]
+name = "bonding-sender"
+description = "Bonding sender: spreads one SRT stream over every modem of the box"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "bonding-sender"
+path = "src/main.rs"
+
+[dependencies]
+bonding-protocol = { path = "../bonding-protocol" }
+net-sys = { path = "../net-sys" }
+
+[dev-dependencies]
+alloc-counter = { path = "../alloc-counter" }
+bonding-receiver = { path = "../bonding-receiver" }
+
+[lints]
+workspace = true

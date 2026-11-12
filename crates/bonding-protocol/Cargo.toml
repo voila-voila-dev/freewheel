@@ -1,0 +1,10 @@
+[package]
+name = "bonding-protocol"
+description = "SRTLA wire format: pure parsing and encoding, no I/O"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true

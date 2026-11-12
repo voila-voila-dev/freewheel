@@ -1,0 +1,7 @@
+/target
+node_modules/
+*.log
+.DS_Store
+dist/
+.cache/
+bench/results.json

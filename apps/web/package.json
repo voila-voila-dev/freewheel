@@ -1,0 +1,31 @@
+{
+	"name": "@freewheel/web",
+	"description": "Web UI: the box's control panel and the server dashboard",
+	"private": true,
+	"type": "module",
+	"imports": {
+		"#/*": "./src/*"
+	},
+	"scripts": {
+		"build": "vite build",
+		"check": "biome check",
+		"check-types": "tsc --noEmit",
+		"dev": "vite dev --clearScreen false"
+	},
+	"dependencies": {
+		"@freewheel/domain": "workspace:*",
+		"@tanstack/react-router": "catalog:",
+		"effect": "catalog:effect",
+		"react": "catalog:react",
+		"react-dom": "catalog:react"
+	},
+	"devDependencies": {
+		"@freewheel/typescript-config": "workspace:*",
+		"@types/bun": "catalog:",
+		"@types/react": "catalog:",
+		"@types/react-dom": "catalog:",
+		"@vitejs/plugin-react": "catalog:",
+		"typescript": "catalog:",
+		"vite": "catalog:"
+	}
+}

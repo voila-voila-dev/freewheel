@@ -1,0 +1,19 @@
+{
+	"name": "@freewheel/fetch-traces",
+	"description": "Downloads public cellular traces into .cache/traces (never committed)",
+	"private": true,
+	"type": "module",
+	"imports": {
+		"#*": "./src/*"
+	},
+	"scripts": {
+		"start": "bun src/index.ts",
+		"check": "biome check",
+		"check-types": "tsc --noEmit"
+	},
+	"devDependencies": {
+		"@freewheel/typescript-config": "workspace:*",
+		"@types/bun": "catalog:",
+		"typescript": "catalog:"
+	}
+}

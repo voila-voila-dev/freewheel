@@ -1,0 +1,4 @@
+# Lint settings for the lab scripts.
+# Scenarios are sourced by run-scenario: LINKS and BITRATE are read there.
+disable=SC2034
+shell=bash

@@ -1,0 +1,17 @@
+[package]
+name = "packet-capture"
+description = "Reads pcap captures of UDP traffic and reports what upstream SRTLA does on the wire"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+bonding-protocol = { path = "../bonding-protocol" }
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "analyze-srtla-capture"
+path = "src/bin/analyze_srtla_capture.rs"

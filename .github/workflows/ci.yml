@@ -1,0 +1,116 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  rust:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+
+  typescript:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - run: bun install --frozen-lockfile
+      - run: bun run check
+      - run: bun run check-types
+      - run: bun run --filter '*' test
+      - run: bun run agent:build
+
+  bench:
+    # Native ARM64, like the box: sizes and instruction counts are representative.
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y valgrind
+      - run: rustup show
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - run: bun install --frozen-lockfile
+      - run: cargo test --package benchmarks --test zero_allocations
+      - run: bun run bench
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bench-results
+          path: bench/results.json
+
+  public-traces:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - run: bun install --frozen-lockfile
+      - run: bun run traces:fetch
+      - run: cargo test --release --package link-emulator --test public_traces
+
+  srtla-lab:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint the lab scripts
+        run: cd labs/srtla-capture && shellcheck -x run-scenario.sh run-all.sh lib/*.sh scenarios/*.sh
+      - name: Run every lab scenario against upstream SRTLA
+        run: labs/srtla-capture/run-all.sh 4
+      - name: Characterisation tests on the captures
+        run: cargo test --release -p packet-capture --test lab
+        env:
+          FREEWHEEL_REQUIRE_CAPTURES: "1"
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: srtla-captures
+          path: .cache/srtla-captures/
+
+  interop:
+    # Upstream sender → our receiver: the same 35 lab scenarios and characterisation tests.
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run every lab scenario with bonding-receiver in place of srtla_rec
+        run: labs/srtla-capture/run-all.sh 4
+        env:
+          RECEIVER: freewheel
+      - name: Characterisation tests on those captures
+        run: cargo test --release -p packet-capture --test lab
+        env:
+          FREEWHEEL_REQUIRE_CAPTURES: "1"
+          FREEWHEEL_CAPTURES_DIR: ${{ github.workspace }}/.cache/srtla-captures-freewheel-receiver
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: srtla-captures-freewheel-receiver
+          path: .cache/srtla-captures-freewheel-receiver/
+
+  interop-sender:
+    # Our sender → upstream receiver: the same 35 lab scenarios and characterisation tests.
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run every lab scenario with bonding-sender in place of srtla_send
+        run: labs/srtla-capture/run-all.sh 4
+        env:
+          SENDER: freewheel
+      - name: Characterisation tests on those captures
+        run: cargo test --release -p packet-capture --test lab
+        env:
+          FREEWHEEL_REQUIRE_CAPTURES: "1"
+          FREEWHEEL_CAPTURES_DIR: ${{ github.workspace }}/.cache/srtla-captures-freewheel-sender
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: srtla-captures-freewheel-sender
+          path: .cache/srtla-captures-freewheel-sender/
