@@ -19,6 +19,8 @@ case "$receiver/$sender" in
 	upstream/freewheel) out="$root/.cache/srtla-captures-freewheel-sender" ;;
 	*) out="$root/.cache/srtla-captures-freewheel" ;;
 esac
+# Created here, as the runner user: the build container runs as root and would own them.
+mkdir -p "$out/runs" "$root/.cache/lab-target"
 mounts=()
 if [ "$receiver" = freewheel ] || [ "$sender" = freewheel ]; then
 	# Built for Linux in the same Debian as the lab, so they run there unchanged.
@@ -27,7 +29,6 @@ if [ "$receiver" = freewheel ] || [ "$sender" = freewheel ]; then
 		cargo build --quiet --release --locked -p bonding-receiver -p bonding-sender
 	mounts=(-v "$root/.cache/lab-target/release:/opt/freewheel:ro")
 fi
-mkdir -p "$out/runs"
 
 docker build -q -t freewheel-srtla-lab "$lab" > /dev/null
 scenarios=("$@")

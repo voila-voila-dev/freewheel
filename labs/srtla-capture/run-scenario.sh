@@ -23,10 +23,10 @@ if [ "${1:-}" = --list ]; then
 fi
 
 SCENARIO=${1:-}
-[ -n "$SCENARIO" ] && [ -f "$LAB/scenarios/$SCENARIO.sh" ] || {
+if [ -z "$SCENARIO" ] || [ ! -f "$LAB/scenarios/$SCENARIO.sh" ]; then
 	echo "usage: run-scenario <name> | --list" >&2
 	exit 2
-}
+fi
 export SCENARIO
 mkdir -p "$OUT"
 find "$OUT" -maxdepth 1 -name "$SCENARIO.*" -delete
