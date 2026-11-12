@@ -154,3 +154,23 @@ jobs:
         with:
           name: srtla-captures-freewheel
           path: .cache/srtla-captures-freewheel/
+
+  srtla-bench:
+    # Our sender and receiver against upstream's, and irlserver/srtla_send: delivered throughput,
+    # CPU, memory, recovery after a dead link. Fails if ours is behind upstream.
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bench every combination, 3 runs, one scenario at a time
+        run: labs/srtla-capture/bench.sh 3 1
+      - name: Summary and gate
+        run: |
+          set -o pipefail
+          cargo run --release -p packet-capture --bin bench-srtla -- .cache/srtla-bench --json bench/srtla-results.json | tee -a "$GITHUB_STEP_SUMMARY"
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: srtla-bench
+          path: |
+            bench/srtla-results.json
+            .cache/srtla-bench/

@@ -15,3 +15,7 @@ workspace = true
 [[bin]]
 name = "analyze-srtla-capture"
 path = "src/bin/analyze_srtla_capture.rs"
+
+[[bin]]
+name = "bench-srtla"
+path = "src/bin/bench_srtla.rs"

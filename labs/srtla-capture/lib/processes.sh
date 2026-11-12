@@ -5,14 +5,16 @@
 #
 # RECEIVER=upstream (default) runs upstream srtla_rec; RECEIVER=freewheel runs our
 # bonding-receiver. SENDER=upstream (default) runs upstream srtla_send; SENDER=freewheel runs our
-# bonding-sender. run-all.sh builds ours and mounts them at /opt/freewheel. Same command lines.
+# bonding-sender; SENDER=irlserver runs irlserver/srtla_send (bench image only). run-all.sh builds
+# ours and mounts them at /opt/freewheel. Same command lines.
 
 readonly SRTLA=/opt/srtla
 case "${SENDER:-upstream}" in
 	upstream) readonly SENDER_PROGRAM=$SRTLA/srtla_send ;;
 	freewheel) readonly SENDER_PROGRAM=/opt/freewheel/bonding-sender ;;
+	irlserver) readonly SENDER_PROGRAM=/opt/irlserver/srtla_send ;;
 	*)
-		echo "unknown SENDER=$SENDER (upstream or freewheel)" >&2
+		echo "unknown SENDER=$SENDER (upstream, freewheel or irlserver)" >&2
 		exit 2
 		;;
 esac
@@ -143,6 +145,25 @@ wait_for_srt_connection() {
 	mark "SRT caller $sender connected"
 }
 
+# start_raw_stream <sender> <seconds> <bits per second>: random bytes at a fixed rate through SRT,
+# for throughput: no encoder to pace or to load the CPU. SRT payloads of 1316 bytes, like MPEG-TS.
+start_raw_stream() {
+	local sender=$1 seconds=$2 rate=$3
+	local caller_log="$OUT/$SCENARIO.srt-caller.$sender.log"
+	local connections
+	connections=$(srt_connections "$caller_log")
+	# The caller appends to its log while the subshell waits for it to say it connected.
+	# shellcheck disable=SC2094
+	(
+		# Marks go to stderr here: stdout is the stream.
+		wait_for_srt_connection "$caller_log" "$connections" "$sender" >&2
+		head -c "$((rate * seconds / 8))" /dev/urandom | pv -q -L "$((rate / 8))" -B 65536
+	) | in_box srt-live-transmit -chunk:1316 file://con \
+		"srt://127.0.0.1:$((6000 + sender))?latency=$SRT_LATENCY_MS&maxbw=0" \
+		>> "$caller_log" 2>&1 &
+	mark "raw stream $sender started at $rate bit/s for ${seconds}s"
+}
+
 # start_all <seconds> <k…>: SRT listener, receiver, sender 1 on the given links, stream.
 start_all() {
 	local seconds=$1
@@ -154,6 +175,7 @@ start_all() {
 }
 
 stop_all() {
+	sample_resources
 	in_box pkill -f ffmpeg || true
 	sleep 1
 	in_box pkill -f "$SENDER_PROGRAM" || true
@@ -166,6 +188,28 @@ stop_all() {
 sample_memory() {
 	mark "memory sender $(resident_kb "$SENDER_PROGRAM")"
 	mark "memory receiver $(resident_kb "$RECEIVER_PROGRAM")"
+}
+
+# sample_resources: CPU time and peak resident memory of the sender and the receiver, since they
+# started, marked as "resources <role> cpu_ms=<n> peak_kb=<n>" (summed over their processes).
+sample_resources() {
+	mark "resources sender $(process_resources "$SENDER_PROGRAM")"
+	mark "resources receiver $(process_resources "$RECEIVER_PROGRAM")"
+}
+
+# process_resources <binary>: "cpu_ms=<user + system> peak_kb=<VmHWM>" of the processes running it.
+process_resources() {
+	local ticks=0 peak_kb=0 pid stat hwm
+	local hertz
+	hertz=$(getconf CLK_TCK)
+	for pid in $(pgrep -f "^$1( |$)" || true); do
+		stat=$(cut -d')' -f2- "/proc/$pid/stat" 2> /dev/null) || continue
+		# After "pid (comm)": field 12 is utime, 13 stime (14 and 15 of the whole line).
+		ticks=$((ticks + $(echo "$stat" | awk '{ print $12 + $13 }')))
+		hwm=$(awk '/^VmHWM:/ { print $2 }' "/proc/$pid/status" 2> /dev/null || echo 0)
+		peak_kb=$((peak_kb + ${hwm:-0}))
+	done
+	echo "cpu_ms=$((ticks * 1000 / hertz)) peak_kb=$peak_kb"
 }
 
 # resident_kb <binary>: total resident memory of the processes running it, in kB.

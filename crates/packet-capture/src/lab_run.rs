@@ -3,7 +3,8 @@
 use std::path::Path;
 
 use crate::{
-    FrameCheck, FrameDigests, LabRunError, Mark, PcapFile, SrtStatistics, SrtlaReport, UdpDatagram,
+    FrameCheck, FrameDigests, LabRunError, Mark, PcapFile, ProcessResources, SrtStatistics,
+    SrtlaReport, UdpDatagram,
 };
 
 /// Port the receiver (upstream `srtla_rec` or ours) listens on in the lab.
@@ -11,6 +12,8 @@ pub const LAB_RECEIVER_PORT: u16 = 5000;
 const MICROSECONDS_PER_MILLISECOND: i64 = 1_000;
 const SENDER_EXIT_PREFIX: &str = "sender ";
 const SENDER_EXIT_INFIX: &str = " exited with ";
+const RAW_STREAM_PREFIX: &str = "raw stream 1 started at ";
+const BITS_PER_BYTE: u64 = 8;
 
 /// Everything one lab scenario produced.
 #[derive(Debug, Clone)]
@@ -28,6 +31,9 @@ pub struct LabRun {
     /// The received video against what stream 1 sent, frame by frame (`None` when the run
     /// has no frame digests).
     pub frames: Option<FrameCheck>,
+    /// Bytes the SRT listener wrote to `<scenario>.ts`: `<scenario>.received-bytes` when the
+    /// video was discarded, else the file's size (0 when there is neither).
+    pub received_bytes: u64,
 }
 
 impl LabRun {
@@ -60,6 +66,12 @@ impl LabRun {
             marks,
             srt,
             frames,
+            received_bytes: read_text(&file("received-bytes"))
+                .ok()
+                .and_then(|text| text.trim().parse().ok())
+                .unwrap_or_else(|| {
+                    std::fs::metadata(file("ts")).map_or(0, |metadata| metadata.len())
+                }),
         })
     }
 
@@ -79,6 +91,27 @@ impl LabRun {
     pub fn since_start_ms(&self, mark: &Mark) -> i64 {
         to_i64(mark.at_us).saturating_sub(to_i64(self.box_side.start_us))
             / MICROSECONDS_PER_MILLISECOND
+    }
+
+    /// What the sender or the receiver (`role`) cost, as marked at the end of the run.
+    #[must_use]
+    pub fn resources(&self, role: &str) -> Option<ProcessResources> {
+        self.marks
+            .iter()
+            .rev()
+            .find_map(|mark| ProcessResources::parse(&mark.label, role))
+    }
+
+    /// Bytes a raw stream sent (`raw stream 1 started at <bit/s> bit/s for <s>s`), if any.
+    #[must_use]
+    pub fn raw_stream_bytes(&self) -> Option<u64> {
+        let label = self
+            .marks
+            .iter()
+            .find_map(|mark| mark.label.strip_prefix(RAW_STREAM_PREFIX))?;
+        let (rate, rest) = label.split_once(" bit/s for ")?;
+        let seconds: u64 = rest.strip_suffix('s')?.parse().ok()?;
+        Some(rate.parse::<u64>().ok()? * seconds / BITS_PER_BYTE)
     }
 
     /// Exit codes of the senders that stopped by themselves or were stopped, as `(sender, code)`.

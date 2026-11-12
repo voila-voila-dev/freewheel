@@ -5,3 +5,4 @@ node_modules/
 dist/
 .cache/
 bench/results.json
+bench/srtla-results.json

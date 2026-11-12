@@ -36,6 +36,7 @@ One file per scenario in `scenarios/`; `run-scenario --list` prints them.
 | Real conditions | `real-ride` (2 min, everything at once) |
 | Addressing | `same-carrier`, `nat-rebinding`, `address-change`, `link-added`, `link-removed` |
 | Lifecycle | `cold-start`, `receiver-restart`, `sender-restart`, `srt-server-restart` |
+| Bench | `throughput` (50 Mbit/s, clean links), `aggregation` (12 Mbit/s over 2 × 8 Mbit/s) |
 | Limits and abuse | `too-many-links` (9 for 8 allowed), `two-senders`, `group-limit` (200 fake groups), `hostile-packets`, `group-hijack` (sniffed group id) |
 
 A scenario sets `LINKS` (how many modems) and defines `run()` with the building blocks of
@@ -96,6 +97,26 @@ cargo test --release -p packet-capture --test end_to_end -- --nocapture   # any 
 
 `tests/end_to_end.rs` holds one limit per scenario. Unlike the characterisation tests they are
 requirements: every combination must meet them, and CI checks all four.
+
+### Bench
+
+```sh
+labs/srtla-capture/bench.sh [runs=3] [parallel=1]                                     # → .cache/srtla-bench/
+cargo run --release -p packet-capture --bin bench-srtla -- .cache/srtla-bench           # table + gate
+```
+
+Each sender against upstream's receiver (upstream, ours, irlserver/srtla_send at a pinned
+commit, built in the `bench` image target), and each receiver behind upstream's sender, on four
+scenarios: `steady` (3 Mbit/s video), `throughput` (50 Mbit/s of SRT on clean links: CPU and
+delivery), `aggregation` (12 Mbit/s over two 8 Mbit/s links: only bonding carries it) and
+`link-drop` (recovery). The lab marks the CPU time and peak memory (`VmHWM`) of the sender and
+the receiver at the end of every run.
+
+Other work on the host only adds CPU and memory and takes delivered bytes away, so the summary
+keeps the best run for those; recovery varies by itself and keeps the median. The gate fails if
+our sender or receiver is behind upstream's: delivered −2 points, CPU +10 % + 30 ms, memory
++25 % or +1 MiB, gap +200 ms, damaged frames +10, restored share −10 points. CI job
+`srtla-bench`, on a dedicated ARM64 runner: a busy laptop is not a bench.
 
 `crates/packet-capture/tests/lab/` holds one characterisation test per scenario: what upstream
 does there, measured on its captures. They are skipped when the lab has not been run, and

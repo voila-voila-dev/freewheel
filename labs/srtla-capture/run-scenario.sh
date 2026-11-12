@@ -43,5 +43,9 @@ run
 stop_all
 stop_captures
 write_frame_digests
+received_bytes=$(stat -c %s "$OUT/$SCENARIO.ts" 2> /dev/null || echo 0)
+echo "$received_bytes" > "$OUT/$SCENARIO.received-bytes"
+# DISCARD_VIDEO=1 (the bench): keep the digests and the size, not the video.
+if [ "${DISCARD_VIDEO:-0}" = 1 ]; then rm -f "$OUT/$SCENARIO.ts" "$OUT/$SCENARIO".sent.*.ts; fi
 mark "done"
-echo "$SCENARIO: $(stat -c %s "$OUT/$SCENARIO.ts" 2>/dev/null || echo 0) bytes of video received"
+echo "$SCENARIO: $received_bytes bytes of video received"
