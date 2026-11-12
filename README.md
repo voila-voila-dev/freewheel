@@ -3,6 +3,22 @@
 Self-hosted mobile live streaming for long-distance bike travel. Written from scratch,
 wire-compatible with [BELABOX](https://github.com/BELABOX), plus the telemetry it never had.
 
+## Where we stand (2026-11-12)
+
+Milestone **M1, link bonding in Rust with SRTLA compatibility**: step 4 of 6 is done. Nothing runs on a bike yet; everything below runs in emulation and CI.
+
+- ✅ **M0 foundations**: monorepo, CI, deterministic cellular emulator (`link-emulator`), bench harness gating size, instructions and allocations.
+- ✅ **SRTLA spec** written from packet captures of the upstream binaries (35 lab scenarios): [`docs/technical/protocol/srtla.md`](docs/technical/protocol/srtla.md).
+- ✅ **Wire format** (`bonding-protocol`): every packet, encode + decode, fuzzed, zero allocation.
+- ✅ **Receiver** (`bonding-receiver`): drop-in for `srtla_rec`. Upstream sender → our receiver passes the 40 characterisation tests.
+- ✅ **Sender** (`bonding-sender`): drop-in for `srtla_send`, link selection as a pure state machine. Our sender → upstream receiver passes the same 40 tests; Rust ↔ Rust works on localhost.
+- ⏭️ **Next**: end-to-end with 2–4 links under `tc netem` and a real SRT stream checked frame by frame, then a bench against upstream.
+- Later: our own transport (M1b), own server, bench hardware, encoder, agent, OS image, enclosure. See [`docs/technical/roadmap.md`](docs/technical/roadmap.md).
+
+Compatibility mode reproduces upstream exactly, quirks included; fixes come with our own transport.
+
+## Layout
+
 | Path | What | Replaces |
 |---|---|---|
 | `crates/bonding-protocol` | Bonding wire formats, pure: our transport + SRTLA compatibility | `srtla` |
