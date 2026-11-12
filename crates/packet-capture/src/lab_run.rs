@@ -2,7 +2,9 @@
 
 use std::path::Path;
 
-use crate::{LabRunError, Mark, PcapFile, SrtStatistics, SrtlaReport, UdpDatagram};
+use crate::{
+    FrameCheck, FrameDigests, LabRunError, Mark, PcapFile, SrtStatistics, SrtlaReport, UdpDatagram,
+};
 
 /// Port the receiver (upstream `srtla_rec` or ours) listens on in the lab.
 pub const LAB_RECEIVER_PORT: u16 = 5000;
@@ -23,10 +25,14 @@ pub struct LabRun {
     pub marks: Vec<Mark>,
     /// What the SRT listener received (zero when it never ran).
     pub srt: SrtStatistics,
+    /// The received video against what stream 1 sent, frame by frame (`None` when the run
+    /// has no frame digests).
+    pub frames: Option<FrameCheck>,
 }
 
 impl LabRun {
-    /// Loads `<directory>/<scenario>.{box.pcap,server.pcap,marks,srt-stats.json}`.
+    /// Loads `<directory>/<scenario>.{box.pcap,server.pcap,marks,srt-stats.json}` and, when
+    /// present, the frame digests `<scenario>.{sent.1,received}.frames`.
     ///
     /// # Errors
     /// A capture or the marks file is missing or unreadable.
@@ -37,12 +43,23 @@ impl LabRun {
             |_| SrtStatistics::default(),
             |text| SrtStatistics::parse(&text),
         );
+        let frames = match (
+            read_text(&file("sent.1.frames")),
+            read_text(&file("received.frames")),
+        ) {
+            (Ok(sent), Ok(received)) => Some(FrameCheck::compare(
+                &FrameDigests::parse(&sent),
+                &FrameDigests::parse(&received),
+            )),
+            _ => None,
+        };
         Ok(Self {
             scenario: scenario.to_owned(),
             box_side: report_of(&file("box.pcap"))?,
             server_side: report_of(&file("server.pcap"))?,
             marks,
             srt,
+            frames,
         })
     }
 

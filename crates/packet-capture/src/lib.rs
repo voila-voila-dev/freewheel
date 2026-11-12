@@ -4,12 +4,14 @@
 //! - [`UdpDatagram`]: an IPv4 UDP datagram decoded from one frame.
 //! - [`SrtlaReport`]: what a capture says about registration, keepalives, acknowledgements
 //!   and how traffic is spread across links.
+//! - [`FrameCheck`]: the received video compared with what was sent, frame by frame.
 //! - [`LabRun`]: everything one lab scenario produced (two captures, marks, SRT statistics).
 //!
 //! Lab and scenarios: `labs/srtla-capture/`. Findings: `docs/technical/protocol/srtla.md`.
 
 mod capture_error;
 mod captured_frame;
+mod frame_check;
 mod lab_run;
 mod lab_run_error;
 mod link_layer;
@@ -23,6 +25,7 @@ mod udp_datagram;
 
 pub use capture_error::CaptureError;
 pub use captured_frame::CapturedFrame;
+pub use frame_check::{FrameCheck, FrameDigest, FrameDigests};
 pub use lab_run::{LAB_RECEIVER_PORT, LabRun};
 pub use lab_run_error::LabRunError;
 pub use link_layer::LinkLayer;

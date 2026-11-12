@@ -74,9 +74,9 @@ fn print_summary(directory: &Path) -> Result<(), String> {
         .collect();
     scenarios.sort();
     println!(
-        "| Scenario | Data packets per link (box side) | Groups | SRT received / dropped | Sender exits |"
+        "| Scenario | Data packets per link (box side) | Groups | SRT received / dropped | Frames intact / late start / damaged / cut, longest gap | Sender exits |"
     );
-    println!("|---|---|---|---|---|");
+    println!("|---|---|---|---|---|---|");
     for scenario in scenarios {
         match LabRun::load(directory, &scenario) {
             Ok(run) => {
@@ -91,8 +91,19 @@ fn print_summary(directory: &Path) -> Result<(), String> {
                 if silent > 0 {
                     per_link.push(format!("+{silent} without data"));
                 }
+                let frames = run.frames.map_or_else(String::new, |check| {
+                    format!(
+                        "{}/{} / {} / {} / {}, {} ms",
+                        check.intact,
+                        check.sent,
+                        check.before_start,
+                        check.damaged(),
+                        check.truncated,
+                        check.longest_gap_ms
+                    )
+                });
                 println!(
-                    "| {scenario} | {} | {} | {} / {} | {:?} |",
+                    "| {scenario} | {} | {} | {} / {} | {frames} | {:?} |",
                     per_link.join(", "),
                     run.server_side.group_ids.len(),
                     run.srt.received_packets,
@@ -100,7 +111,7 @@ fn print_summary(directory: &Path) -> Result<(), String> {
                     run.sender_exits()
                 );
             }
-            Err(error) => println!("| {scenario} | {error} | | | |"),
+            Err(error) => println!("| {scenario} | {error} | | | | |"),
         }
     }
     Ok(())

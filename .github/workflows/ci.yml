@@ -69,6 +69,10 @@ jobs:
         run: cargo test --release -p packet-capture --test lab
         env:
           FREEWHEEL_REQUIRE_CAPTURES: "1"
+      - name: End-to-end, frame by frame
+        run: cargo test --release -p packet-capture --test end_to_end -- --nocapture
+        env:
+          FREEWHEEL_REQUIRE_CAPTURES: "1"
       - if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -86,6 +90,11 @@ jobs:
           RECEIVER: freewheel
       - name: Characterisation tests on those captures
         run: cargo test --release -p packet-capture --test lab
+        env:
+          FREEWHEEL_REQUIRE_CAPTURES: "1"
+          FREEWHEEL_CAPTURES_DIR: ${{ github.workspace }}/.cache/srtla-captures-freewheel-receiver
+      - name: End-to-end, frame by frame
+        run: cargo test --release -p packet-capture --test end_to_end -- --nocapture
         env:
           FREEWHEEL_REQUIRE_CAPTURES: "1"
           FREEWHEEL_CAPTURES_DIR: ${{ github.workspace }}/.cache/srtla-captures-freewheel-receiver
@@ -109,8 +118,39 @@ jobs:
         env:
           FREEWHEEL_REQUIRE_CAPTURES: "1"
           FREEWHEEL_CAPTURES_DIR: ${{ github.workspace }}/.cache/srtla-captures-freewheel-sender
+      - name: End-to-end, frame by frame
+        run: cargo test --release -p packet-capture --test end_to_end -- --nocapture
+        env:
+          FREEWHEEL_REQUIRE_CAPTURES: "1"
+          FREEWHEEL_CAPTURES_DIR: ${{ github.workspace }}/.cache/srtla-captures-freewheel-sender
       - if: always()
         uses: actions/upload-artifact@v4
         with:
           name: srtla-captures-freewheel-sender
           path: .cache/srtla-captures-freewheel-sender/
+
+  rust-to-rust:
+    # Our sender → our receiver: the same 35 lab scenarios, characterisation and end-to-end tests.
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run every lab scenario with bonding-sender and bonding-receiver
+        run: labs/srtla-capture/run-all.sh 4
+        env:
+          RECEIVER: freewheel
+          SENDER: freewheel
+      - name: Characterisation tests on those captures
+        run: cargo test --release -p packet-capture --test lab
+        env:
+          FREEWHEEL_REQUIRE_CAPTURES: "1"
+          FREEWHEEL_CAPTURES_DIR: ${{ github.workspace }}/.cache/srtla-captures-freewheel
+      - name: End-to-end, frame by frame
+        run: cargo test --release -p packet-capture --test end_to_end -- --nocapture
+        env:
+          FREEWHEEL_REQUIRE_CAPTURES: "1"
+          FREEWHEEL_CAPTURES_DIR: ${{ github.workspace }}/.cache/srtla-captures-freewheel
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: srtla-captures-freewheel
+          path: .cache/srtla-captures-freewheel/

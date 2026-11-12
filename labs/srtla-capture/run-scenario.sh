@@ -42,5 +42,6 @@ mark "scenario $SCENARIO"
 run
 stop_all
 stop_captures
+write_frame_digests
 mark "done"
 echo "$SCENARIO: $(stat -c %s "$OUT/$SCENARIO.ts" 2>/dev/null || echo 0) bytes of video received"

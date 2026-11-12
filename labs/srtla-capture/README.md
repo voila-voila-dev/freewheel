@@ -73,14 +73,29 @@ FREEWHEEL_CAPTURES_DIR=$PWD/.cache/srtla-captures-freewheel-sender cargo test --
 scenarios start ours in place of `srtla_rec` (`RECEIVER=freewheel`) or `srtla_send`
 (`SENDER=freewheel`), with the same command line. One side changed at a time is an interop
 test ("upstream sender → our receiver", "our sender → upstream receiver"); both set gives
-Rust ↔ Rust in `.cache/srtla-captures-freewheel/`.
+Rust ↔ Rust in `.cache/srtla-captures-freewheel/` (CI job `rust-to-rust`).
 
 Leave the machine idle while it runs: an overloaded host paces the encoders unevenly and the
 measurements drift.
 
 Runs need `docker run --privileged` (network namespaces, tc, iptables). Each run writes to
 `.cache/srtla-captures/` (never committed): `<scenario>.box.pcap`, `.server.pcap`, `.marks`,
-the received video `.ts`, the SRT listener statistics `.srt-stats.json` and every process log.
+the received video `.ts`, what was sent `.sent.<k>.ts`, the frame digests `.frames`, the SRT listener statistics `.srt-stats.json` and every process log.
+
+### End-to-end, frame by frame
+
+The encoder also writes what it sends to `<scenario>.sent.1.ts`. At the end of a run, both it and
+the received `<scenario>.ts` are hashed per compressed video frame (`ffmpeg -copyts -c copy -f
+framemd5` → `.sent.1.frames`, `.received.frames`), and `FrameCheck` compares them by timestamp:
+intact, damaged (arrived different or not at all), late start (before the SRT connection was up)
+and cut (after the last frame that arrived), plus the longest gap.
+
+```sh
+cargo test --release -p packet-capture --test end_to_end -- --nocapture   # any captures directory, via FREEWHEEL_CAPTURES_DIR
+```
+
+`tests/end_to_end.rs` holds one limit per scenario. Unlike the characterisation tests they are
+requirements: every combination must meet them, and CI checks all four.
 
 `crates/packet-capture/tests/lab/` holds one characterisation test per scenario: what upstream
 does there, measured on its captures. They are skipped when the lab has not been run, and

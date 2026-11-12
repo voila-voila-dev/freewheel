@@ -92,7 +92,8 @@ reload_sender_links() {
 	mark "sender $sender reloaded with links $*"
 }
 
-# start_stream <sender> <seconds>: test pattern → SRT caller → sender.
+# start_stream <sender> <seconds>: test pattern → SRT caller → sender. The encoder also keeps
+# what it sent in <scenario>.sent.<sender>.ts, to check the received video frame by frame.
 start_stream() {
 	local sender=$1 seconds=$2
 	in_box srt-live-transmit -q "udp://127.0.0.1:$((7000 + sender))" \
@@ -102,7 +103,8 @@ start_stream() {
 		-f lavfi -i "sine=frequency=440" -t "$seconds" \
 		-c:v libx264 -preset ultrafast -tune zerolatency \
 		-b:v "$BITRATE" -maxrate "$BITRATE" -bufsize "$BITRATE" -g 60 \
-		-c:a aac -b:a 128k -f mpegts "udp://127.0.0.1:$((7000 + sender))?pkt_size=1316" \
+		-c:a aac -b:a 128k -map 0:v -map 1:a -f tee \
+		"[f=mpegts]udp://127.0.0.1:$((7000 + sender))?pkt_size=1316|[f=mpegts]$OUT/$SCENARIO.sent.$sender.ts" \
 		2>> "$OUT/$SCENARIO.ffmpeg.log" &
 	mark "stream $sender started at $BITRATE for ${seconds}s"
 }
@@ -141,4 +143,24 @@ resident_kb() {
 		return
 	fi
 	ps -o rss= -p "$pids" | awk '{ total += $1 } END { print total + 0 }'
+}
+
+# write_frame_digests: one MD5 per encoded video frame, keyed by its timestamp, of what each
+# stream sent and of what the SRT listener received. Hashing the compressed frames, not the
+# decoded pictures, tells intact frames from damaged ones exactly. -copyts keeps the stream's own
+# timestamps: otherwise each file is shifted to its own start and a late first packet offsets them all.
+write_frame_digests() {
+	local sent
+	for sent in "$OUT/$SCENARIO".sent.*.ts; do
+		[ -f "$sent" ] || continue
+		frame_digests "$sent" > "${sent%.ts}.frames"
+	done
+	: > "$OUT/$SCENARIO.received.frames"
+	if [ -s "$OUT/$SCENARIO.ts" ]; then
+		frame_digests "$OUT/$SCENARIO.ts" > "$OUT/$SCENARIO.received.frames"
+	fi
+}
+
+frame_digests() {
+	ffmpeg -loglevel quiet -err_detect ignore_err -copyts -i "$1" -map 0:v -c copy -f framemd5 - || true
 }
