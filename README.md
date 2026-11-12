@@ -5,7 +5,7 @@ wire-compatible with [BELABOX](https://github.com/BELABOX), plus the telemetry i
 
 ## Where we stand (2026-11-12)
 
-Milestone **M1, link bonding in Rust with SRTLA compatibility**: step 5 of 6 is done. Nothing runs on a bike yet; everything below runs in emulation and CI.
+Milestone **M1, link bonding in Rust with SRTLA compatibility**, is done. Nothing runs on a bike yet; everything below runs in emulation and CI.
 
 - ✅ **M0 foundations**: monorepo, CI, deterministic cellular emulator (`link-emulator`), bench harness gating size, instructions and allocations.
 - ✅ **SRTLA spec** written from packet captures of the upstream binaries (35 lab scenarios): [`docs/technical/protocol/srtla.md`](docs/technical/protocol/srtla.md).
@@ -13,8 +13,9 @@ Milestone **M1, link bonding in Rust with SRTLA compatibility**: step 5 of 6 is 
 - ✅ **Receiver** (`bonding-receiver`): drop-in for `srtla_rec`. Upstream sender → our receiver passes the 40 characterisation tests.
 - ✅ **Sender** (`bonding-sender`): drop-in for `srtla_send`, link selection as a pure state machine. Our sender → upstream receiver passes the same 40 tests; Rust ↔ Rust works on localhost.
 - ✅ **End-to-end**: a real SRT stream through 2–4 links under `tc netem`, checked frame by frame. All four combinations (upstream ↔ upstream, both interop directions, Rust ↔ Rust) meet the same per-scenario limits in CI. Loss, jitter and bufferbloat are fully hidden; a dying link costs at most a few frames, as upstream.
-- ⏭️ **Next**: bench against upstream and `irlserver/srtla_send`: throughput, CPU, memory, recovery time after a link drop.
-- Later: our own transport (M1b), own server, bench hardware, encoder, agent, OS image, enclosure. See [`docs/technical/roadmap.md`](docs/technical/roadmap.md).
+- ✅ **Bench** against upstream and `irlserver/srtla_send`, gated in CI: ours is on par with upstream on delivery, CPU, memory and recovery. Results in [`bench/README.md`](bench/README.md).
+- ⏭️ **Next, M1b**: our own transport, measured against this baseline. First target: a restored link gets its traffic back fast (irlserver: 47 % within 25 s, upstream and ours: 12 %).
+- Later: own server, bench hardware, encoder, agent, OS image, enclosure. See [`docs/technical/roadmap.md`](docs/technical/roadmap.md).
 
 Compatibility mode reproduces upstream exactly, quirks included; fixes come with our own transport.
 
