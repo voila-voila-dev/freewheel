@@ -177,8 +177,8 @@ jobs:
 
   transport-bench:
     # What M1b is judged on, scenario by scenario: frames lost, longest gap, delivered bitrate,
-    # encoder-to-server latency. Baseline (upstream SRTLA + SRT), our compatibility mode and
-    # irlserver; M1b's candidates join as more pairs, with --gate.
+    # encoder-to-server latency. Baseline (upstream SRTLA + SRT), our compatibility mode,
+    # irlserver and our own transport (M1b), which --gate will hold to the baseline once it wins.
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4

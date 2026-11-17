@@ -4,7 +4,7 @@
 #   labs/srtla-capture/bench-transport.sh [runs=3] [parallel=1] [receiver/sender…]
 #
 # Default combinations: upstream/upstream (the baseline: SRTLA + SRT), freewheel/freewheel (our
-# compatibility mode) and upstream/irlserver. Each candidate of M1b joins as another pair.
+# compatibility mode), upstream/irlserver, and transport/transport (our own transport, M1b).
 # Runs go to .cache/transport-bench/<receiver>-<sender>/run-<n>/; then
 #   cargo run --release -p packet-capture --bin bench-transport -- .cache/transport-bench
 # prints frames lost, longest gap, delivered bitrate and latency per scenario
@@ -23,7 +23,7 @@ parallel=${2:-1}
 shift 2 || shift $#
 scenarios=(link-drop burst-loss varying-bandwidth all-links-drop real-ride trace-city trace-drive)
 pairs=("$@")
-if [ ${#pairs[@]} -eq 0 ]; then pairs=(upstream/upstream freewheel/freewheel upstream/irlserver); fi
+if [ ${#pairs[@]} -eq 0 ]; then pairs=(upstream/upstream freewheel/freewheel upstream/irlserver transport/transport); fi
 
 rm -rf "$root/.cache/transport-bench"
 for run in $(seq 1 "$runs"); do

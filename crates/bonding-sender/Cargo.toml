@@ -10,6 +10,10 @@ rust-version.workspace = true
 name = "bonding-sender"
 path = "src/main.rs"
 
+[[bin]]
+name = "freewheel-sender"
+path = "src/bin/freewheel_sender.rs"
+
 [dependencies]
 bonding-protocol = { path = "../bonding-protocol" }
 net-sys = { path = "../net-sys" }

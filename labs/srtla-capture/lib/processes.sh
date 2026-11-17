@@ -5,16 +5,19 @@
 #
 # RECEIVER=upstream (default) runs upstream srtla_rec; RECEIVER=freewheel runs our
 # bonding-receiver. SENDER=upstream (default) runs upstream srtla_send; SENDER=freewheel runs our
-# bonding-sender; SENDER=irlserver runs irlserver/srtla_send (bench image only). run-all.sh builds
-# ours and mounts them at /opt/freewheel. Same command lines.
+# bonding-sender; SENDER=irlserver runs irlserver/srtla_send (bench image only). RECEIVER=transport
+# and SENDER=transport run our own transport (M1b candidate: freewheel-receiver, freewheel-sender),
+# which only talk to each other. run-all.sh builds ours and mounts them at /opt/freewheel. Same
+# command lines.
 
 readonly SRTLA=/opt/srtla
 case "${SENDER:-upstream}" in
 	upstream) readonly SENDER_PROGRAM=$SRTLA/srtla_send ;;
 	freewheel) readonly SENDER_PROGRAM=/opt/freewheel/bonding-sender ;;
 	irlserver) readonly SENDER_PROGRAM=/opt/irlserver/srtla_send ;;
+	transport) readonly SENDER_PROGRAM=/opt/freewheel/freewheel-sender ;;
 	*)
-		echo "unknown SENDER=$SENDER (upstream, freewheel or irlserver)" >&2
+		echo "unknown SENDER=$SENDER (upstream, freewheel, irlserver or transport)" >&2
 		exit 2
 		;;
 esac
@@ -24,8 +27,9 @@ readonly SENDER_NAME
 case "${RECEIVER:-upstream}" in
 	upstream) readonly RECEIVER_PROGRAM=$SRTLA/srtla_rec ;;
 	freewheel) readonly RECEIVER_PROGRAM=/opt/freewheel/bonding-receiver ;;
+	transport) readonly RECEIVER_PROGRAM=/opt/freewheel/freewheel-receiver ;;
 	*)
-		echo "unknown RECEIVER=$RECEIVER (upstream or freewheel)" >&2
+		echo "unknown RECEIVER=$RECEIVER (upstream, freewheel or transport)" >&2
 		exit 2
 		;;
 esac

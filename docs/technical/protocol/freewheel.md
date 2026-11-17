@@ -69,6 +69,62 @@ prove the M1 way (`tests/freewheel_*.rs`): round trips of random packets, exact 
 every input up to 2 bytes, every kind × class byte at every boundary length, 2 million random
 mutations in release. Benchmark `freewheel_decode` keeps the decode allocation-free.
 
+## First candidate (M1b step 3)
+
+`freewheel-sender` and `freewheel-receiver` (crates `bonding-sender` and `bonding-receiver`,
+modules `freewheel`), same command lines as the SRTLA programs. Like SRTLA, the candidate carries
+the SRT stream unchanged, as live-class data, so the bench compares transports with SRT on top
+for everyone. In the lab: `SENDER=transport RECEIVER=transport`.
+
+**Session.** The box draws a random session id. Each link sends `Join` every 250 ms until the
+server answers `Accept`. A packet from an unknown session or link gets `Close(refused)` and the
+link joins again, which also covers a server restart. The server follows a link's address on
+every packet. SRT's answers go back through the link that delivered last.
+
+**Acknowledgements.** The server acknowledges each link every 4 data packets, or 5 ms after a
+lone one, and answers a keepalive at once. Links idle for 50 ms send a keepalive, so every link
+keeps a fresh RTT, including one that carries nothing.
+
+**Estimation, per link, from each ACK.**
+- RTT = now − echoed send time − ACK delay; smoothed (gain 1/8) and its minimum.
+- Delivery rate: bytes the server received over at least 100 ms; the maximum of the last
+  10 samples (1 s), never below 500 kbit/s.
+- Loss: bytes acknowledged out of flight against bytes received, smoothed.
+- Congestion window: twice the bandwidth-delay product (rate × minimum RTT), at least ten packets.
+
+**Scheduling by expected arrival.** Each packet goes to the usable link where it should arrive
+first: half the smoothed RTT plus the time to drain what that link has in flight at its rate,
+stretched by its loss. Links within their window are preferred; when all are full, the earliest
+anyway (live video cannot wait).
+
+**Late is dropped, not queued.** A live packet whose best expected arrival is over 1 s (half of
+SRT's 2 s latency, so one retransmission still fits) is dropped at the box. The first version
+queued it anyway: on `trace-drive` the modems' queues then held seconds of stale video after
+each outage, and the stream stayed broken ~12 s after the capacity came back.
+
+**Stall and return.** A link that heard no ACK for 4 smoothed RTTs (at least 300 ms, at most
+1 s) while it sent something stops carrying data and forgets its RTT, but keeps its rate history. Its
+keepalives continue every 50 ms; the first ACK brings it back with its previous share at once.
+This replaces SRTLA's 4 s timeout and its slow window ramp.
+
+Tested on a simulated network (`crates/bonding-sender/tests/freewheel_transport.rs`): it prefers
+the link that arrives first, spreads a stream no single link can carry, moves off a link whose
+capacity collapses, leaves a dead link and takes it back within 200 ms, keeps late video out of
+a modem's queue. Nothing allocates per packet (`freewheel_zero_allocations.rs`).
+
+First lab results (2026-11-17, one local run on OrbStack, against the local baseline runs):
+
+| Scenario | Frames lost: baseline → candidate | Delivered | Latency p50 / p99 |
+|---|---|---|---|
+| trace-drive | 1766 → **513** (irlserver 1903) | 1869 → **2902** kbit/s | 2083 / 2119 → 2129 / 2154 ms |
+| real-ride | 70 → **45** (longest gap 825 → 363 ms) | 3287 → 3302 kbit/s | 2126 / 2157 → 2093 / 2117 ms |
+| all-links-drop | 211 → **187** (gap 6.9 → 6.2 s) | 2686 → 2758 kbit/s | same |
+| link-drop, burst-loss, varying-bandwidth, trace-city | 0–2 → 0–5 | same | same |
+
+`--gate` does not pass yet, on small margins: trace-city 5 frames against 2, varying-bandwidth
+1 against 0, trace-drive p50 +46 ms (it delivers 3.5× more frames there, the hard ones
+included). CI's 3 runs decide whether that is noise.
+
 ## Alternative to evaluate
 
 Multipath QUIC with datagrams (IETF draft): a standard, but a large dependency and less control over media-aware scheduling.

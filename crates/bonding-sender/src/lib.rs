@@ -4,5 +4,6 @@
 //! [`srtla::Sender`] is the SRTLA compatibility mode as a pure state machine (no sockets, no
 //! clock); [`server`] runs it on UDP sockets with one thread.
 
+pub mod freewheel;
 pub mod server;
 pub mod srtla;
