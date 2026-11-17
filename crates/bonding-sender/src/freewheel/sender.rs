@@ -9,7 +9,7 @@ use bonding_protocol::freewheel::{
 
 use super::limits::{
     HOUSEKEEPING_PERIOD_US, JOIN_RETRY_US, KEEPALIVE_IDLE_US, MAX_EXPECTED_ARRIVAL_US,
-    OPEN_RETRY_US, STALL_MAX_US, STALL_MIN_US, STALL_RTT_MULTIPLE,
+    MAX_OVERFLOW_ARRIVAL_US, OPEN_RETRY_US, STALL_MAX_US, STALL_MIN_US, STALL_RTT_MULTIPLE,
 };
 use super::link::Link;
 use super::link_estimate::wrapped_us;
@@ -331,8 +331,8 @@ impl Sender {
             }
         }
         best_within
-            .or(best_any)
             .filter(|(_, arrival_us)| *arrival_us <= MAX_EXPECTED_ARRIVAL_US)
+            .or_else(|| best_any.filter(|(_, arrival_us)| *arrival_us <= MAX_OVERFLOW_ARRIVAL_US))
             .map(|(index, _)| index)
     }
 }

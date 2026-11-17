@@ -178,7 +178,7 @@ jobs:
   transport-bench:
     # What M1b is judged on, scenario by scenario: frames lost, longest gap, delivered bitrate,
     # encoder-to-server latency. Baseline (upstream SRTLA + SRT), our compatibility mode,
-    # irlserver and our own transport (M1b), which --gate will hold to the baseline once it wins.
+    # irlserver and our own transport (M1b), which --gate holds to the baseline.
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
@@ -188,6 +188,8 @@ jobs:
         run: |
           set -o pipefail
           cargo run --release -p packet-capture --bin bench-transport -- .cache/transport-bench --json bench/transport-results.json | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Gate (our transport against the baseline)
+        run: cargo run --release -p packet-capture --bin bench-transport -- .cache/transport-bench --gate transport-transport
       - if: always()
         uses: actions/upload-artifact@v4
         with:

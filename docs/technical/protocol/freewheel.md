@@ -95,12 +95,21 @@ keeps a fresh RTT, including one that carries nothing.
 **Scheduling by expected arrival.** Each packet goes to the usable link where it should arrive
 first: half the smoothed RTT plus the time to drain what that link has in flight at its rate,
 stretched by its loss. Links within their window are preferred; when all are full, the earliest
-anyway (live video cannot wait).
+anyway (live video cannot wait), but only if it should arrive within 500 ms.
 
 **Late is dropped, not queued.** A live packet whose best expected arrival is over 1 s (half of
 SRT's 2 s latency, so one retransmission still fits) is dropped at the box. The first version
 queued it anyway: on `trace-drive` the modems' queues then held seconds of stale video after
 each outage, and the stream stayed broken ~12 s after the capacity came back.
+
+**A full modem queue looks like clock drift to SRT.** SRT's receiver measures its clock drift on
+the delay of the caller's ACKACKs, and shifts its whole delivery schedule when that delay grows.
+Queuing up to 1 s beyond the windows on `trace-drive` kept RTTs at 400–600 ms while capacity was
+enough; SRT's buffer grew from 1970 to 2030 ms, and the latency of every frame with it (+26 ms
+p50 against the baseline in CI). Hence the 500 ms bound above for packets sent beyond the windows
+(4 local runs: p50 2113 → 2097 ms, frames lost 505 → 532, delivered 2900 → 2885 kbit/s; at
+300 ms, p50 2093 but 646 frames lost). Sending ACKACKs on every link so the shortest queue sets
+the drift was tried and changed nothing: all three queues were full.
 
 **Stall and return.** A link that heard no ACK for 4 smoothed RTTs (at least 300 ms, at most
 1 s) while it sent something stops carrying data and forgets its RTT, but keeps its rate history. Its
@@ -110,7 +119,7 @@ This replaces SRTLA's 4 s timeout and its slow window ramp.
 Tested on a simulated network (`crates/bonding-sender/tests/freewheel_transport.rs`): it prefers
 the link that arrives first, spreads a stream no single link can carry, moves off a link whose
 capacity collapses, leaves a dead link and takes it back within 200 ms, keeps late video out of
-a modem's queue. Nothing allocates per packet (`freewheel_zero_allocations.rs`).
+a modem's queue, keeps a saturated queue under 700 ms. Nothing allocates per packet (`freewheel_zero_allocations.rs`).
 
 First lab results (2026-11-17, one local run on OrbStack, against the local baseline runs):
 
@@ -121,9 +130,18 @@ First lab results (2026-11-17, one local run on OrbStack, against the local base
 | all-links-drop | 211 → **187** (gap 6.9 → 6.2 s) | 2686 → 2758 kbit/s | same |
 | link-drop, burst-loss, varying-bandwidth, trace-city | 0–2 → 0–5 | same | same |
 
-`--gate` does not pass yet, on small margins: trace-city 5 frames against 2, varying-bandwidth
-1 against 0, trace-drive p50 +46 ms (it delivers 3.5× more frames there, the hard ones
-included). CI's 3 runs decide whether that is noise.
+CI, 3 runs (2026-11-17, run 44124314452): the gain holds. trace-drive 1754 → **532** frames
+lost, 1784 → **2886** kbit/s; real-ride 63 → 49; all-links-drop 209 → 186; trace-city and
+varying-bandwidth 0 → 0 (the local misses were noise). `--gate` failed on one measure only:
+trace-drive p50 2078 → 2104 ms (+26, slack 20), the drift above.
+
+**Longest gap on `trace-drive`: 6.4 s against 3.8 s**, not gated. From 17 to 24 s and 83 to 87 s
+the three traces together carry 0.4–2.4 Mbit/s for a 3.4 Mbit/s stream: no transport delivers
+those seconds whole. The candidate spreads the shortfall, one or two packets late in almost
+every frame, so nearly every frame is damaged for the length of the hole; the baseline damages
+many more frames overall (1754) but lets an intact one through now and then, which cuts its
+gaps short. The answer is lowering the encoder's bitrate when the links cannot carry it, not
+the scheduler.
 
 ## Alternative to evaluate
 

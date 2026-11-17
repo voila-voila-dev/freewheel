@@ -22,6 +22,10 @@ pub const STALL_MAX_US: u64 = 1_000_000;
 /// would only delay every packet behind it (`trace-drive`: seconds of stale queue after an
 /// outage).
 pub const MAX_EXPECTED_ARRIVAL_US: u64 = 1_000_000;
+/// When every link has filled its congestion window, a live packet still goes out on the
+/// earliest link only if it would arrive within this: beyond, it would sit in a modem queue
+/// that SRT reads as clock drift and answers by delaying the whole stream.
+pub const MAX_OVERFLOW_ARRIVAL_US: u64 = 500_000;
 /// RTT assumed before a link has measured one (a typical LTE uplink).
 pub const INITIAL_RTT_US: u64 = 100_000;
 /// Rate assumed for a link that has delivered little yet, and the floor of every estimate,

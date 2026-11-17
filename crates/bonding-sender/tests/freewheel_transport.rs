@@ -129,3 +129,26 @@ fn does_not_fill_a_modem_queue_with_video_that_would_arrive_too_late() {
     assert!(!latencies_us.is_empty());
     assert_eq!(late, 0, "{late} of {} packets over 1 s", latencies_us.len());
 }
+
+#[test]
+fn keeps_a_saturated_modem_queue_short_so_srt_does_not_read_it_as_clock_drift() {
+    let mut network = Network::new(&[LinkSpec {
+        delay_us: 40 * MS,
+        rate_bps: 6 * MBPS,
+        max_queue_us: 3 * S,
+    }]);
+    network.run(500 * MS, 0);
+    network.run(2 * S, 3 * MBPS);
+    network.set_rate(0, MBPS);
+    network.run(2 * S, 3 * MBPS);
+    network.take_latencies_us();
+    network.run(3 * S, 3 * MBPS);
+    let latencies_us = network.take_latencies_us();
+    let slowest_us = latencies_us.iter().copied().max().unwrap_or(u64::MAX);
+    assert!(!latencies_us.is_empty());
+    assert!(
+        slowest_us < 700 * MS,
+        "slowest packet took {} ms",
+        slowest_us / MS
+    );
+}
