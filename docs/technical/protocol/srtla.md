@@ -318,7 +318,13 @@ upstream and not visible in the captures:
   file at that moment stops the sender.
 - **Sockets**: one per address, bound to it on an ephemeral port, non-blocking, 8 MB send
   buffer asked. A full buffer is a failed send. A socket that cannot be bound is retried every
-  housekeeping, quietly.
+  housekeeping, quietly. One deliberate difference: ours are **connected** to the receiver
+  (upstream uses `sendto` on unconnected sockets), so the kernel keeps the route instead of
+  looking it up through the per-modem policy rules for every packet: 15–20 % less kernel time
+  per send in the lab's topology (2026-11-17), the bulk of the sender's CPU at 50 Mbit/s. What
+  upstream would accept from another address it never expects there; an ICMP error a
+  connected socket reports (receiver restarting) fails one send, which is retried at once, so
+  the link behaves as upstream's.
 - **Activity**: every packet from the receiver refreshes its link, except `REG_NGP` and REG2
   (at any length). A failed data send makes the link unusable at once; the next housekeeping
   declares it failed.

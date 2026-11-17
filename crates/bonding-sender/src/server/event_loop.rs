@@ -58,7 +58,6 @@ pub fn serve(
         slots.push(ReadinessSlot::new(io.listen_socket()));
         slots.extend(
             io.link_sockets()
-                .iter()
                 .map(|(_, socket)| ReadinessSlot::new(socket)),
         );
         wait_until_readable(&mut slots, wake_interval).map_err(ServeError::Wait)?;
@@ -71,7 +70,7 @@ pub fn serve(
                 .skip(1)
                 .zip(io.link_sockets())
                 .filter(|(slot, _)| slot.is_ready())
-                .map(|(_, (link, _))| *link),
+                .map(|(_, (link, _))| link),
         );
         if slots.first().is_some_and(ReadinessSlot::is_ready)
             && let Ok((len, SocketAddr::V4(from))) = io.listen_socket().recv_from(&mut buffer)
