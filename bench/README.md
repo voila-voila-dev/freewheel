@@ -50,8 +50,8 @@ Reading:
 `labs/srtla-capture/bench-transport.sh` then `bench-transport` (CI job `transport-bench`): what
 M1b is judged on, per scenario. Frames lost or damaged and longest gap (frame by frame),
 delivered bitrate, encoder-to-server latency over the intact frames (SRT's 2 s buffer
-included). Median of the runs. `--gate <receiver>-<sender>` checks a candidate against the
-baseline. Method in `labs/srtla-capture/README.md` ("Transport bench").
+included), restored link share on `link-drop`. Median of the runs. `--gate <receiver>-<sender>`
+checks a candidate against the baseline (and irlserver for the restored link). Method in `labs/srtla-capture/README.md` ("Transport bench").
 
 Baseline of 2026-11-17 (CI run 44085568015, `e649d57`, median of 3 runs on the ARM64 runner):
 

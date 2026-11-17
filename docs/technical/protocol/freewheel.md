@@ -135,6 +135,13 @@ lost, 1784 → **2886** kbit/s; real-ride 63 → 49; all-links-drop 209 → 186;
 varying-bandwidth 0 → 0 (the local misses were noise). `--gate` failed on one measure only:
 trace-drive p50 2078 → 2104 ms (+26, slack 20), the drift above.
 
+After the 500 ms bound (CI run 44151066706, 3 runs): trace-drive 1743 → **497** frames lost,
+1832 → **2903** kbit/s, p50 2078 → 2096 ms (+18, within the slack). real-ride 58 → 59: both lose
+the same seconds when two of three links are cut (90–93 s, 2 Mbit/s left for 3.4), 49 to 61
+frames from run to run; the gate now allows +5 % or +3 frames per scenario, the total must still
+be lower (742 against 2010). A restored link (`link-drop`) carries **48 %** of the traffic 15–25 s
+after it came back, against 40 % for irlserver and 13 % for the baseline: the gate holds it there.
+
 **Longest gap on `trace-drive`: 6.4 s against 3.8 s**, not gated. From 17 to 24 s and 83 to 87 s
 the three traces together carry 0.4–2.4 Mbit/s for a 3.4 Mbit/s stream: no transport delivers
 those seconds whole. The candidate spreads the shortfall, one or two packets late in almost

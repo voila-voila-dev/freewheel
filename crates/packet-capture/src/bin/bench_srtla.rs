@@ -10,7 +10,6 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
-use std::net::Ipv4Addr;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -19,9 +18,6 @@ use packet_capture::{LabRun, median};
 const USAGE: &str = "usage: bench-srtla <bench directory> [--json <file>]";
 const UPSTREAM: &str = "upstream";
 const FREEWHEEL: &str = "freewheel";
-/// Restored link's share, measured 15–25 s after it came back.
-const RESTORED_SHARE_FROM_S: usize = 15;
-const RESTORED_SHARE_TO_S: usize = 25;
 
 /// Delivered share may be this many points below upstream's.
 const DELIVERED_SLACK_POINTS: f64 = 2.0;
@@ -163,7 +159,7 @@ fn sample(run: &Path) -> Sample {
             sample.link_drop_damaged_frames = Some(to_f64(frames.damaged()));
             sample.link_drop_gap_ms = Some(to_f64(frames.longest_gap_ms));
         }
-        sample.link_drop_restored_share_percent = restored_share_percent(&link_drop);
+        sample.link_drop_restored_share_percent = link_drop.restored_link_share_percent();
     }
     sample
 }
@@ -181,31 +177,6 @@ fn cpu_ms(run: &LabRun, role: &str) -> Option<f64> {
 fn peak_kb(run: &LabRun, role: &str) -> Option<f64> {
     run.resources(role)
         .map(|resources| to_f64(resources.peak_kb))
-}
-
-/// Link 2's share of data packets 15–25 s after `restore link 2`, in per cent.
-fn restored_share_percent(run: &LabRun) -> Option<f64> {
-    let restore_s = usize::try_from(run.mark_ms("restore link 2")?.max(0) / 1_000).ok()?;
-    let window = (
-        restore_s + RESTORED_SHARE_FROM_S,
-        restore_s + RESTORED_SHARE_TO_S,
-    );
-    let link_2 = Ipv4Addr::new(10, 2, 0, 2);
-    let mut on_link_2 = 0_u64;
-    let mut total = 0_u64;
-    for (link, stats) in &run.box_side.links {
-        let packets: u64 = stats
-            .data_packets_per_second
-            .iter()
-            .skip(window.0)
-            .take(window.1 - window.0)
-            .sum();
-        total += packets;
-        if *link.ip() == link_2 {
-            on_link_2 += packets;
-        }
-    }
-    (total > 0).then(|| to_f64(on_link_2) * 100.0 / to_f64(total))
 }
 
 fn medians(samples: &[Sample]) -> Medians {

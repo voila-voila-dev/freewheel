@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::net::SocketAddrV4;
 
+use bonding_protocol::freewheel::{self, is_freewheel};
 use bonding_protocol::srtla::{ID_LEN, PacketType, classify, data_sequence_number, raw_type};
 
 use crate::{LinkStats, SrtlaEvent, UdpDatagram};
@@ -81,7 +82,14 @@ impl SrtlaReport {
                 .map_or((at_ms, at_ms), |(first, _)| (first, at_ms)),
         );
 
-        if let Some(sequence_number) = data_sequence_number(payload) {
+        // Our own transport (M1b) wraps each SRT packet: its data counts like SRTLA's, its
+        // control packets are not SRTLA's.
+        let srt_packet = match freewheel::Packet::decode(payload) {
+            Ok(freewheel::Packet::Data(data)) => data.payload,
+            _ if is_freewheel(payload) => return,
+            _ => payload,
+        };
+        if let Some(sequence_number) = data_sequence_number(srt_packet) {
             stats.data_packets += 1;
             stats.data_bytes += length as u64;
             let second = usize::try_from(at_ms / MILLISECONDS_PER_SECOND).unwrap_or(usize::MAX);

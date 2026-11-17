@@ -19,8 +19,19 @@ use packet_capture::{LabRun, median};
 const USAGE: &str =
     "usage: bench-transport <bench directory> [--json <file>] [--gate <receiver>-<sender>]";
 const BASELINE: &str = "upstream-upstream";
+/// irlserver: the other open source sender, the bar for a restored link (M1b).
+const IRLSERVER: &str = "upstream-irlserver";
+/// The scenario where one link dies and comes back alone: the only one whose restored link
+/// share means something (in `all-links-drop` every link comes back at once).
+const RESTORED_LINK_SCENARIO: &str = "link-drop";
 const MARKS_SUFFIX: &str = ".marks";
 
+/// Frames lost on one scenario may exceed the baseline's by this share, or by
+/// [`DAMAGED_SLACK_FRAMES`] if more: when the links cannot carry the stream (`real-ride`, two of
+/// three links cut), both lose the same seconds and the count is a coin toss between runs. The
+/// total over every scenario must still be lower.
+const DAMAGED_SLACK_RATIO: f64 = 0.05;
+const DAMAGED_SLACK_FRAMES: f64 = 3.0;
 /// Delivered video may be this much below the baseline's: the encoder's own variation.
 const DELIVERED_SLACK_RATIO: f64 = 0.98;
 /// Latency may be this much above the baseline's: scheduler noise of a shared host.
@@ -36,6 +47,7 @@ struct Summary {
     delivered_kbps: f64,
     latency_median_ms: f64,
     latency_p99_ms: f64,
+    restored_share_percent: f64,
 }
 
 /// One run of one scenario.
@@ -46,6 +58,7 @@ struct Sample {
     delivered_kbps: Option<f64>,
     latency_median_ms: Option<f64>,
     latency_p99_ms: Option<f64>,
+    restored_share_percent: Option<f64>,
 }
 
 /// `(scenario, combination)` → summary.
@@ -172,6 +185,9 @@ fn sample(run: &Path, scenario: &str) -> Sample {
         delivered_kbps: lab_run.delivered_kbps(),
         latency_median_ms: lab_run.latency.map(|latency| latency.median_ms),
         latency_p99_ms: lab_run.latency.map(|latency| latency.p99_ms),
+        restored_share_percent: (scenario == RESTORED_LINK_SCENARIO)
+            .then(|| lab_run.restored_link_share_percent())
+            .flatten(),
     }
 }
 
@@ -184,6 +200,7 @@ fn summary(samples: &[Sample]) -> Summary {
         delivered_kbps: median_of(|s| s.delivered_kbps),
         latency_median_ms: median_of(|s| s.latency_median_ms),
         latency_p99_ms: median_of(|s| s.latency_p99_ms),
+        restored_share_percent: median_of(|s| s.restored_share_percent),
     }
 }
 
@@ -199,13 +216,13 @@ fn table(results: &Results) -> String {
     let mut text = String::new();
     let _ = writeln!(
         text,
-        "| Scenario | Sender → receiver | Runs | Frames lost or damaged | Longest gap | Delivered | Latency p50 / p99 | Recording delivered |"
+        "| Scenario | Sender → receiver | Runs | Frames lost or damaged | Longest gap | Delivered | Latency p50 / p99 | Restored link share | Recording delivered |"
     );
-    let _ = writeln!(text, "|---|---|---|---|---|---|---|---|");
+    let _ = writeln!(text, "|---|---|---|---|---|---|---|---|---|");
     for ((scenario, combination), s) in results {
         let _ = writeln!(
             text,
-            "| {scenario} | {} | {} | {} | {} ms | {} kbit/s | {} / {} ms | – |",
+            "| {scenario} | {} | {} | {} | {} ms | {} kbit/s | {} / {} ms | {} | – |",
             label(combination),
             s.runs,
             show(s.damaged_frames, 0),
@@ -213,6 +230,7 @@ fn table(results: &Results) -> String {
             show(s.delivered_kbps, 0),
             show(s.latency_median_ms, 0),
             show(s.latency_p99_ms, 0),
+            show_percent(s.restored_share_percent),
         );
     }
     text
@@ -223,6 +241,14 @@ fn show(value: f64, decimals: usize) -> String {
         "–".to_owned()
     } else {
         format!("{value:.decimals$}")
+    }
+}
+
+fn show_percent(value: f64) -> String {
+    if value.is_nan() {
+        "–".to_owned()
+    } else {
+        format!("{value:.0} %")
     }
 }
 
@@ -245,7 +271,9 @@ fn gate(results: &Results, candidate: &str) -> Vec<String> {
                 "frames lost or damaged",
                 ours.damaged_frames,
                 baseline.damaged_frames,
-                ours.damaged_frames <= baseline.damaged_frames,
+                ours.damaged_frames
+                    <= baseline.damaged_frames
+                        + (baseline.damaged_frames * DAMAGED_SLACK_RATIO).max(DAMAGED_SLACK_FRAMES),
             ),
             (
                 "delivered (kbit/s)",
@@ -266,7 +294,22 @@ fn gate(results: &Results, candidate: &str) -> Vec<String> {
                 ours.latency_p99_ms <= baseline.latency_p99_ms + TAIL_LATENCY_SLACK_MS,
             ),
         ];
-        for (what, ours, baseline, holds) in checks {
+        // A restored link's share (`link-drop`): at least the baseline's and irlserver's.
+        let restored_bar = [Some(baseline), get(IRLSERVER)]
+            .into_iter()
+            .flatten()
+            .map(|reference| reference.restored_share_percent)
+            .filter(|share| !share.is_nan())
+            .reduce(f64::max);
+        let restored_check = restored_bar.map(|bar| {
+            (
+                "restored link share (%)",
+                ours.restored_share_percent,
+                bar,
+                ours.restored_share_percent >= bar,
+            )
+        });
+        for (what, ours, baseline, holds) in checks.into_iter().chain(restored_check) {
             if !holds {
                 failures.push(format!(
                     "{scenario}, {what}: {} against {}",
@@ -296,6 +339,7 @@ fn to_json(results: &Results) -> String {
             ("delivered_kbps", s.delivered_kbps),
             ("latency_median_ms", s.latency_median_ms),
             ("latency_p99_ms", s.latency_p99_ms),
+            ("restored_share_percent", s.restored_share_percent),
         ];
         let _ = write!(
             text,

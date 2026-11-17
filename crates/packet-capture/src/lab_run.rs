@@ -1,5 +1,6 @@
 //! Everything one lab scenario produced: both captures, its marks and the SRT statistics.
 
+use std::net::Ipv4Addr;
 use std::path::Path;
 
 use crate::{
@@ -16,6 +17,13 @@ const RAW_STREAM_PREFIX: &str = "raw stream 1 started at ";
 const BITS_PER_BYTE: u64 = 8;
 const STREAM_PREFIX: &str = "stream 1 started at ";
 const BITS_PER_KILOBIT: f64 = 1_000.0;
+const MILLISECONDS_PER_SECOND: i64 = 1_000;
+/// The link `link-drop` cuts and restores.
+const RESTORED_LINK: Ipv4Addr = Ipv4Addr::new(10, 2, 0, 2);
+const RESTORED_MARK: &str = "restore link 2";
+/// The restored link's share is measured this long after it came back, in seconds.
+const RESTORED_SHARE_FROM_S: usize = 15;
+const RESTORED_SHARE_TO_S: usize = 25;
 
 /// Everything one lab scenario produced.
 #[derive(Debug, Clone)]
@@ -111,6 +119,33 @@ impl LabRun {
     pub fn since_start_ms(&self, mark: &Mark) -> i64 {
         to_i64(mark.at_us).saturating_sub(to_i64(self.box_side.start_us))
             / MICROSECONDS_PER_MILLISECOND
+    }
+
+    /// Link 2's share of the data packets 15–25 s after `restore link 2` (`link-drop`), in per
+    /// cent: how much traffic a restored link got back. `None` without that mark or traffic.
+    #[must_use]
+    pub fn restored_link_share_percent(&self) -> Option<f64> {
+        let restore_s =
+            usize::try_from(self.mark_ms(RESTORED_MARK)?.max(0) / MILLISECONDS_PER_SECOND).ok()?;
+        let (from_s, to_s) = (
+            restore_s + RESTORED_SHARE_FROM_S,
+            restore_s + RESTORED_SHARE_TO_S,
+        );
+        let mut on_restored = 0_u64;
+        let mut total = 0_u64;
+        for (link, stats) in &self.box_side.links {
+            let packets: u64 = stats
+                .data_packets_per_second
+                .iter()
+                .skip(from_s)
+                .take(to_s - from_s)
+                .sum();
+            total += packets;
+            if *link.ip() == RESTORED_LINK {
+                on_restored += packets;
+            }
+        }
+        (total > 0).then(|| to_f64(on_restored) * 100.0 / to_f64(total))
     }
 
     /// What the sender or the receiver (`role`) cost, as marked at the end of the run.

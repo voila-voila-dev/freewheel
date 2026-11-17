@@ -146,12 +146,17 @@ cargo run --release -p packet-capture --bin bench-transport -- .cache/transport-
 
 The measures M1b is judged on (`docs/technical/protocol/freewheel.md`, "How we decide"), per
 scenario: frames lost or damaged, longest gap, delivered bitrate (kbit/s over the stream's
-duration), and encoder-to-server latency p50 / p99. Scenarios: `link-drop`, `burst-loss`,
+duration), encoder-to-server latency p50 / p99, and on `link-drop` the restored link's share of
+the data packets 15–25 s after it came back (from the box capture; our transport's packets are
+unwrapped to count their SRT data). Scenarios: `link-drop`, `burst-loss`,
 `varying-bandwidth`, `all-links-drop`, `real-ride`, `trace-city`, `trace-drive`. Default pairs:
 the baseline (upstream ↔ upstream), our compatibility mode (Rust ↔ Rust) and irlserver; each
 candidate joins as one more pair. Median of the runs for every measure. `--gate` fails unless
-the candidate does at least as well as the baseline on every scenario (2 % less delivered,
-+20 ms p50, +50 ms p99 of slack) and loses fewer frames overall. The recording delivered after
+the candidate does at least as well as the baseline on every scenario (slack: frames lost +5 %
+or +3 frames, whichever is more, 2 % less delivered, +20 ms p50, +50 ms p99), loses fewer frames
+overall, and gives a restored link at least the share the baseline and irlserver give it. The
+frame slack is for scenarios where the links cannot carry the stream (`real-ride`, two of three
+links cut): every transport loses the same seconds there, and the count is a coin toss. The recording delivered after
 an outage is not measured yet: it needs the background traffic class. CI job `transport-bench`.
 
 `crates/packet-capture/tests/lab/` holds one characterisation test per scenario: what upstream
