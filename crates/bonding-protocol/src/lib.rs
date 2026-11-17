@@ -3,4 +3,5 @@
 //! Pure functions only: no sockets, no clocks, no allocation on the hot path.
 #![no_std]
 
+pub mod freewheel;
 pub mod srtla;

@@ -1,6 +1,6 @@
 [package]
 name = "bonding-protocol"
-description = "SRTLA wire format: pure parsing and encoding, no I/O"
+description = "Wire formats (freewheel v0, SRTLA): pure parsing and encoding, no I/O"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

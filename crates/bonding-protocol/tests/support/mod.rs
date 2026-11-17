@@ -2,6 +2,8 @@
 
 #![allow(dead_code)]
 
+pub mod freewheel;
+
 use bonding_protocol::srtla::{
     GroupId, ID_LEN, MAX_DATAGRAM_LEN, MAX_SEQUENCE_NUMBER, Packet, PacketType, SRT_MIN_LEN,
     SequenceNumber,

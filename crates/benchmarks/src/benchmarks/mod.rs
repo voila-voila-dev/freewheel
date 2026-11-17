@@ -1,6 +1,7 @@
 //! Every benchmark, one per file.
 
 mod bitrate_clamp;
+mod freewheel_decode;
 mod receiver_forward;
 mod sender_forward;
 mod srtla_classify;
@@ -12,6 +13,7 @@ use crate::Benchmark;
 pub const ALL: &[Benchmark] = &[
     srtla_classify::BENCHMARK,
     srtla_decode::BENCHMARK,
+    freewheel_decode::BENCHMARK,
     receiver_forward::BENCHMARK,
     sender_forward::BENCHMARK,
     bitrate_clamp::BENCHMARK,
