@@ -174,3 +174,24 @@ jobs:
           path: |
             bench/srtla-results.json
             .cache/srtla-bench/
+
+  transport-bench:
+    # What M1b is judged on, scenario by scenario: frames lost, longest gap, delivered bitrate,
+    # encoder-to-server latency. Baseline (upstream SRTLA + SRT), our compatibility mode and
+    # irlserver; M1b's candidates join as more pairs, with --gate.
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bench every combination, 3 runs, one scenario at a time
+        run: labs/srtla-capture/bench-transport.sh 3 1
+      - name: Summary
+        run: |
+          set -o pipefail
+          cargo run --release -p packet-capture --bin bench-transport -- .cache/transport-bench --json bench/transport-results.json | tee -a "$GITHUB_STEP_SUMMARY"
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: transport-bench
+          path: |
+            bench/transport-results.json
+            .cache/transport-bench/

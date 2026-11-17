@@ -29,14 +29,12 @@ target=lab
 if [ "$sender" = irlserver ]; then target=bench; fi
 # Created here, as the runner user: the build container runs as root and would own them.
 mkdir -p "$out/runs" "$root/.cache/lab-target"
-mounts=()
-if [ "$receiver" = freewheel ] || [ "$sender" = freewheel ]; then
-	# Built for Linux in the same Debian as the lab, so they run there unchanged.
-	docker run --rm -v "$root:/src" -w /src -v freewheel-cargo-registry:/usr/local/cargo/registry \
-		-e CARGO_TARGET_DIR=/src/.cache/lab-target rust:1.94.0-slim-trixie \
-		cargo build --quiet --release --locked -p bonding-receiver -p bonding-sender
-	mounts=(-v "$root/.cache/lab-target/release:/opt/freewheel:ro")
-fi
+# Built for Linux in the same Debian as the lab, so they run there unchanged: our receiver and
+# sender, and frame-times, which dates each video frame on both ends (every combination).
+docker run --rm -v "$root:/src" -w /src -v freewheel-cargo-registry:/usr/local/cargo/registry \
+	-e CARGO_TARGET_DIR=/src/.cache/lab-target rust:1.94.0-slim-trixie \
+	sh -c "cargo build --quiet --release --locked -p bonding-receiver -p bonding-sender && cargo build --quiet --release --locked -p packet-capture --bin frame-times"
+mounts=(-v "$root/.cache/lab-target/release:/opt/freewheel:ro")
 
 docker build -q --target "$target" -t "freewheel-srtla-$target" "$lab" > /dev/null
 scenarios=("$@")
@@ -44,6 +42,19 @@ if [ ${#scenarios[@]} -eq 0 ]; then
 	scenarios=()
 	for file in "$lab"/scenarios/*.sh; do scenarios+=("$(basename "$file" .sh)"); done
 fi
+
+# Recorded traces the scenarios replay (scenarios/trace-*.sh), downloaded once into .cache/traces.
+readonly MAHIMAHI_TRACES=https://raw.githubusercontent.com/ravinet/mahimahi/master/traces
+scenario_files=()
+for scenario in "${scenarios[@]}"; do scenario_files+=("$lab/scenarios/$scenario.sh"); done
+grep -ho 'mahimahi/[A-Za-z0-9.-]*' "${scenario_files[@]}" 2> /dev/null | sort -u | while read -r trace; do
+	if [ ! -s "$root/.cache/traces/$trace" ]; then
+		mkdir -p "$(dirname "$root/.cache/traces/$trace")"
+		curl -fsSL "$MAHIMAHI_TRACES/${trace#mahimahi/}" -o "$root/.cache/traces/$trace"
+	fi
+done
+mkdir -p "$root/.cache/traces"
+mounts+=(-v "$root/.cache/traces:/opt/traces:ro")
 
 run_one() {
 	local scenario=$1

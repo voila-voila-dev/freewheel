@@ -39,6 +39,8 @@ mod sender_restart;
 mod srt_server_restart;
 mod steady;
 mod too_many_links;
+mod trace_city;
+mod trace_drive;
 mod two_senders;
 mod uplink_only_drop;
 mod varying_bandwidth;

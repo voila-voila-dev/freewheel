@@ -36,7 +36,7 @@ Multipath QUIC with datagrams (IETF draft): a standard, but a large dependency a
 
 ## How we decide
 
-Same recorded traces and emulated links for every candidate, against SRTLA + SRT as baseline.
+Same recorded traces and emulated links for every candidate, against SRTLA + SRT as baseline: `labs/srtla-capture/bench-transport.sh` + `bench-transport --gate <candidate>` (method in `labs/srtla-capture/README.md`, "Transport bench"; baseline in `bench/README.md`, "Transport").
 
 | Metric | Target |
 |---|---|

@@ -3,8 +3,8 @@
 use std::path::Path;
 
 use crate::{
-    FrameCheck, FrameDigests, LabRunError, Mark, PcapFile, ProcessResources, SrtStatistics,
-    SrtlaReport, UdpDatagram,
+    FrameCheck, FrameDigests, FrameLatency, FrameTime, LabRunError, Mark, PcapFile,
+    ProcessResources, SrtStatistics, SrtlaReport, UdpDatagram,
 };
 
 /// Port the receiver (upstream `srtla_rec` or ours) listens on in the lab.
@@ -14,6 +14,8 @@ const SENDER_EXIT_PREFIX: &str = "sender ";
 const SENDER_EXIT_INFIX: &str = " exited with ";
 const RAW_STREAM_PREFIX: &str = "raw stream 1 started at ";
 const BITS_PER_BYTE: u64 = 8;
+const STREAM_PREFIX: &str = "stream 1 started at ";
+const BITS_PER_KILOBIT: f64 = 1_000.0;
 
 /// Everything one lab scenario produced.
 #[derive(Debug, Clone)]
@@ -31,6 +33,9 @@ pub struct LabRun {
     /// The received video against what stream 1 sent, frame by frame (`None` when the run
     /// has no frame digests).
     pub frames: Option<FrameCheck>,
+    /// Encoder-to-server latency of the intact frames of stream 1 (`None` when the run has no
+    /// frame times: `<scenario>.{sent.1,received}.times`).
+    pub latency: Option<FrameLatency>,
     /// Bytes the SRT listener wrote to `<scenario>.ts`: `<scenario>.received-bytes` when the
     /// video was discarded, else the file's size (0 when there is neither).
     pub received_bytes: u64,
@@ -49,14 +54,28 @@ impl LabRun {
             |_| SrtStatistics::default(),
             |text| SrtStatistics::parse(&text),
         );
-        let frames = match (
+        let digests = match (
             read_text(&file("sent.1.frames")),
             read_text(&file("received.frames")),
         ) {
-            (Ok(sent), Ok(received)) => Some(FrameCheck::compare(
-                &FrameDigests::parse(&sent),
-                &FrameDigests::parse(&received),
-            )),
+            (Ok(sent), Ok(received)) => {
+                Some((FrameDigests::parse(&sent), FrameDigests::parse(&received)))
+            }
+            _ => None,
+        };
+        let frames = digests
+            .as_ref()
+            .map(|(sent, received)| FrameCheck::compare(sent, received));
+        let latency = match (
+            &digests,
+            read_text(&file("sent.1.times")),
+            read_text(&file("received.times")),
+        ) {
+            (Some((sent, received)), Ok(sent_times), Ok(received_times)) => FrameLatency::measure(
+                &FrameTime::parse_all(&sent_times),
+                &FrameTime::parse_all(&received_times),
+                &sent.intact_in(received),
+            ),
             _ => None,
         };
         Ok(Self {
@@ -66,6 +85,7 @@ impl LabRun {
             marks,
             srt,
             frames,
+            latency,
             received_bytes: read_text(&file("received-bytes"))
                 .ok()
                 .and_then(|text| text.trim().parse().ok())
@@ -114,6 +134,24 @@ impl LabRun {
         Some(rate.parse::<u64>().ok()? * seconds / BITS_PER_BYTE)
     }
 
+    /// How long stream 1's encoder ran (`stream 1 started at <rate> for <s>s`), in seconds.
+    #[must_use]
+    pub fn stream_seconds(&self) -> Option<u64> {
+        let label = self
+            .marks
+            .iter()
+            .find_map(|mark| mark.label.strip_prefix(STREAM_PREFIX))?;
+        let (_, seconds) = label.rsplit_once(" for ")?;
+        seconds.strip_suffix('s')?.parse().ok()
+    }
+
+    /// Video the SRT listener delivered, averaged over the time stream 1 ran, in kbit/s.
+    #[must_use]
+    pub fn delivered_kbps(&self) -> Option<f64> {
+        let seconds = self.stream_seconds().filter(|seconds| *seconds > 0)?;
+        Some(to_f64(self.received_bytes * BITS_PER_BYTE) / to_f64(seconds) / BITS_PER_KILOBIT)
+    }
+
     /// Exit codes of the senders that stopped by themselves or were stopped, as `(sender, code)`.
     #[must_use]
     pub fn sender_exits(&self) -> Vec<(u32, i32)> {
@@ -150,6 +188,11 @@ fn report_of(path: &Path) -> Result<SrtlaReport, LabRunError> {
     let datagrams: Vec<UdpDatagram<'_>> =
         frames.into_iter().filter_map(UdpDatagram::decode).collect();
     Ok(SrtlaReport::build(LAB_RECEIVER_PORT, &datagrams))
+}
+
+#[allow(clippy::cast_precision_loss)]
+const fn to_f64(value: u64) -> f64 {
+    value as f64
 }
 
 fn to_i64(value: u64) -> i64 {

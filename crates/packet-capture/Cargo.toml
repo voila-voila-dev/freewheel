@@ -19,3 +19,11 @@ path = "src/bin/analyze_srtla_capture.rs"
 [[bin]]
 name = "bench-srtla"
 path = "src/bin/bench_srtla.rs"
+
+[[bin]]
+name = "frame-times"
+path = "src/bin/frame_times.rs"
+
+[[bin]]
+name = "bench-transport"
+path = "src/bin/bench_transport.rs"

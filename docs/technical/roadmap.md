@@ -19,6 +19,15 @@ Done when: both interop directions and Rust ↔ Rust pass the e2e suite in CI, a
 ## M1b — Our own transport ← now
 Design in `docs/technical/protocol/freewheel.md`: three traffic classes (live, reliable, background recording upload), per-link estimation, arrival-time scheduler, adaptive FEC, deadline-aware retransmission, cross-layer bitrate, session ids, Noise encryption. Prototype candidates, benchmark them against the SRTLA baseline on the same emulated links and recorded traces. The server speaks both protocols.
 
+1. ✅ **Bench for M1b**: the measures of "How we decide", per scenario, on the same lab as M1. Done: `frame-times` dates every video frame at the encoder's output and at the SRT listener's (`LabRun::latency`: p50 / p99 over the intact frames), delivered bitrate per run, `replay_trace` replays recorded LTE uplinks (`trace-city`, `trace-drive`), `labs/srtla-capture/bench-transport.sh` + `bench-transport` (table, JSON, `--gate` for a candidate against the baseline), CI job `transport-bench`. Baseline in `bench/README.md` ("Transport"). The recording measure waits for the background class (step 6).
+2. **Wire format v0** in `bonding-protocol`: session ids, the three classes, acknowledgements carrying per-link timing; same proofs as M1 (round trip to the byte, fuzzing, no allocation).
+3. **First candidate**: per-link estimation + scheduling by expected arrival. Must beat irlserver's return to a restored link and the baseline on `trace-drive`.
+4. **Deadline-aware retransmission**, then **adaptive FEC**, then **media-aware priorities**: one at a time, each kept only if the bench says so.
+5. **Cross-layer bitrate**: the transport tells `bitrate-control` the aggregate capacity.
+6. **Background class**: the full-quality recording uploaded on spare capacity, resumed after outages; the bench measures the share delivered.
+7. **Noise** handshake + AEAD from an audited crate (decision in `decisions.md`).
+8. **Multipath QUIC** with datagrams on the same bench, before freezing the choice.
+
 Done when: on the benchmark suite it beats the baseline on lost frames and delivered bitrate, with equal or lower latency, and delivers 100 % of the recording after outages.
 
 ## M2 — Own server

@@ -29,15 +29,27 @@ case "${RECEIVER:-upstream}" in
 		exit 2
 		;;
 esac
+# Dates each video frame on both ends (crates/packet-capture, `frame-times`), mounted by run-all.sh.
+readonly FRAME_TIMES=/opt/freewheel/frame-times
+readonly STREAM_PORT_BASE=7000
 readonly SRTLA_PORT=5000
 readonly SRT_LISTENER_PORT=5002
 readonly SRT_LATENCY_MS=2000
 BITRATE=${BITRATE:-3M}
 
+# The listener's output goes through frame-times (when mounted), which appends it to
+# <scenario>.ts and dates each frame as it is delivered: <scenario>.received.times.
 start_srt_listener() {
-	in_server srt-live-transmit -q -s:1000 -pf:json -f -statsout:"$OUT/$SCENARIO.srt-stats.json" \
-		"srt://127.0.0.1:$SRT_LISTENER_PORT?mode=listener&lossmaxttl=40&latency=$SRT_LATENCY_MS" \
-		"file://con" >> "$OUT/$SCENARIO.ts" 2>> "$OUT/$SCENARIO.srt-listener.log" &
+	if [ -x "$FRAME_TIMES" ]; then
+		in_server srt-live-transmit -q -s:1000 -pf:json -f -statsout:"$OUT/$SCENARIO.srt-stats.json" \
+			"srt://127.0.0.1:$SRT_LISTENER_PORT?mode=listener&lossmaxttl=40&latency=$SRT_LATENCY_MS" \
+			"file://con" 2>> "$OUT/$SCENARIO.srt-listener.log" |
+			"$FRAME_TIMES" record "$OUT/$SCENARIO.ts" "$OUT/$SCENARIO.received.times" &
+	else
+		in_server srt-live-transmit -q -s:1000 -pf:json -f -statsout:"$OUT/$SCENARIO.srt-stats.json" \
+			"srt://127.0.0.1:$SRT_LISTENER_PORT?mode=listener&lossmaxttl=40&latency=$SRT_LATENCY_MS" \
+			"file://con" >> "$OUT/$SCENARIO.ts" 2>> "$OUT/$SCENARIO.srt-listener.log" &
+	fi
 	sleep 0.5
 }
 
@@ -237,6 +249,22 @@ write_frame_digests() {
 	if [ -s "$OUT/$SCENARIO.ts" ]; then
 		frame_digests "$OUT/$SCENARIO.ts" > "$OUT/$SCENARIO.received.frames"
 	fi
+}
+
+# write_frame_times: when each frame of stream <s> left the encoder (<scenario>.sent.<s>.times),
+# from the capture of its UDP output, which is then deleted (it holds the whole video).
+# The delivery side is written live by the listener (<scenario>.received.times).
+write_frame_times() {
+	local sent sender
+	if [ -x "$FRAME_TIMES" ] && [ -f "$OUT/$SCENARIO.stream.pcap" ]; then
+		for sent in "$OUT/$SCENARIO".sent.*.ts; do
+			[ -f "$sent" ] || continue
+			sender=${sent%.ts}
+			sender=${sender##*.}
+			"$FRAME_TIMES" pcap "$OUT/$SCENARIO.stream.pcap" "$((STREAM_PORT_BASE + sender))" > "${sent%.ts}.times" || true
+		done
+	fi
+	rm -f "$OUT/$SCENARIO.stream.pcap"
 }
 
 frame_digests() {

@@ -3,6 +3,7 @@
 #   <name>.box.pcap, <name>.server.pcap   SRTLA traffic seen by the box and by the server
 #   <name>.marks                          what the scenario did, and when
 #   <name>.ts, <name>.srt-stats.json      video received, SRT listener statistics
+#   <name>.{sent.<s>,received}.times      when each video frame was sent and delivered
 #   <name>.*.log                          every process
 #
 #   run-scenario <name>     one scenario
@@ -13,7 +14,7 @@ readonly LAB=/opt/lab
 export OUT=/out
 
 # shellcheck source=/dev/null
-for library in marks topology impairments processes capture inject; do source "$LAB/lib/$library.sh"; done
+for library in marks topology impairments processes capture inject traces; do source "$LAB/lib/$library.sh"; done
 
 if [ "${1:-}" = --list ]; then
 	for file in "$LAB"/scenarios/*.sh; do
@@ -43,6 +44,7 @@ run
 stop_all
 stop_captures
 write_frame_digests
+write_frame_times
 received_bytes=$(stat -c %s "$OUT/$SCENARIO.ts" 2> /dev/null || echo 0)
 echo "$received_bytes" > "$OUT/$SCENARIO.received-bytes"
 # DISCARD_VIDEO=1 (the bench): keep the digests and the size, not the video.

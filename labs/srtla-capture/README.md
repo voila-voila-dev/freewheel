@@ -33,7 +33,7 @@ One file per scenario in `scenarios/`; `run-scenario --list` prints them.
 | Baseline | `steady`, `four-links`, `asymmetric-links`, `low-bitrate`, `congested`, `long-run` (10 min) |
 | Link quality | `random-loss`, `burst-loss`, `jitter-reordering`, `bufferbloat`, `latency-spike`, `varying-bandwidth` |
 | Outages | `link-drop` (10 s dead zone), `link-drop-long` (20 s), `link-flapping`, `modem-unplugged`, `uplink-only-drop`, `downlink-only-drop`, `all-links-drop` (6 s tunnel), `all-links-lost` (25 s) |
-| Real conditions | `real-ride` (2 min, everything at once) |
+| Real conditions | `real-ride` (2 min, everything at once), `trace-city` and `trace-drive` (recorded LTE uplinks replayed, see below) |
 | Addressing | `same-carrier`, `nat-rebinding`, `address-change`, `link-added`, `link-removed` |
 | Lifecycle | `cold-start`, `receiver-restart`, `sender-restart`, `srt-server-restart` |
 | Bench | `throughput` (50 Mbit/s, clean links), `aggregation` (12 Mbit/s over 2 × 8 Mbit/s) |
@@ -98,6 +98,24 @@ cargo test --release -p packet-capture --test end_to_end -- --nocapture   # any 
 `tests/end_to_end.rs` holds one limit per scenario. Unlike the characterisation tests they are
 requirements: every combination must meet them, and CI checks all four.
 
+### Frame times and latency
+
+`frame-times` (`crates/packet-capture`, built for Linux by `run-all.sh` and mounted with ours)
+dates every video frame on both ends, on the host's clock: on the box, from a capture of the
+encoder's UDP output to its SRT caller (`<scenario>.stream.pcap`, deleted once read →
+`.sent.1.times`); on the server, behind the SRT listener, as its output is written
+(`.received.times`). A frame's time is when its last byte went by. `LabRun::latency` pairs them
+over the intact frames: median, 99th percentile and worst, encoder to server, SRT's 2 s buffer
+included.
+
+### Recorded traces
+
+`trace-city` and `trace-drive` replay recorded LTE uplinks (Mahimahi's, GPL-3.0: downloaded by
+`run-all.sh` into `.cache/traces/`, never committed) with `replay_trace` (`lib/traces.sh`): each
+second, the link's `netem` rate becomes the capacity the trace had that second; a second without
+any delivery opportunity drops everything. Delay (40 ms) and modem queue (100 packets) are ours:
+the traces do not record them. `trace-drive` picks windows with dead seconds on all three links.
+
 ### Bench
 
 ```sh
@@ -118,6 +136,24 @@ our sender or receiver is behind upstream's: delivered −2 points, CPU +10 % + 
 +25 % or +1 MiB, gap +200 ms, damaged frames +10, restored share −10 points. CI job
 `srtla-bench`, on a dedicated ARM64 runner: a busy laptop is not a bench.
 
+### Transport bench (M1b)
+
+```sh
+labs/srtla-capture/bench-transport.sh [runs=3] [parallel=1] [receiver/sender…]           # → .cache/transport-bench/
+cargo run --release -p packet-capture --bin bench-transport -- .cache/transport-bench    # table
+cargo run --release -p packet-capture --bin bench-transport -- .cache/transport-bench --gate <receiver>-<sender>
+```
+
+The measures M1b is judged on (`docs/technical/protocol/freewheel.md`, "How we decide"), per
+scenario: frames lost or damaged, longest gap, delivered bitrate (kbit/s over the stream's
+duration), and encoder-to-server latency p50 / p99. Scenarios: `link-drop`, `burst-loss`,
+`varying-bandwidth`, `all-links-drop`, `real-ride`, `trace-city`, `trace-drive`. Default pairs:
+the baseline (upstream ↔ upstream), our compatibility mode (Rust ↔ Rust) and irlserver; each
+candidate joins as one more pair. Median of the runs for every measure. `--gate` fails unless
+the candidate does at least as well as the baseline on every scenario (2 % less delivered,
++20 ms p50, +50 ms p99 of slack) and loses fewer frames overall. The recording delivered after
+an outage is not measured yet: it needs the background traffic class. CI job `transport-bench`.
+
 `crates/packet-capture/tests/lab/` holds one characterisation test per scenario: what upstream
 does there, measured on its captures. They are skipped when the lab has not been run, and
 required in CI (`FREEWHEEL_REQUIRE_CAPTURES=1`).
@@ -127,6 +163,6 @@ run, committed so the basic wire facts are checked on every build, without Docke
 
 Long scenarios set `CAPTURE_SNAPLEN` to keep only headers (the analyser handles truncated
 frames). Still missing: adaptive encoder bitrate, duplicated or corrupted packets, small MTU,
-IPv6, and replays of real 4G traces recorded on the bike.
+IPv6, and replays of 4G traces recorded on the bike (public LTE traces are replayed already).
 
 It runs anywhere Docker runs. On a Mac, OrbStack runs it as native ARM64 Linux, like the box.

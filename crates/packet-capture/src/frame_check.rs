@@ -3,7 +3,7 @@
 //! Both sides are `ffmpeg -c copy -f framemd5` listings: one MD5 per compressed video frame,
 //! keyed by its presentation timestamp. A frame is intact when its bytes arrived unchanged.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 const DEFAULT_TIME_BASE_HZ: i64 = 90_000;
 const MILLISECONDS_PER_SECOND: i64 = 1_000;
@@ -58,6 +58,22 @@ impl FrameDigests {
             frames,
             time_base_hz,
         }
+    }
+
+    /// Timestamps of the frames of this listing (what was sent) that `received` holds with
+    /// exactly the same bytes.
+    #[must_use]
+    pub fn intact_in(&self, received: &Self) -> HashSet<i64> {
+        let arrived: HashMap<i64, &str> = received
+            .frames
+            .iter()
+            .map(|frame| (frame.pts, frame.hash.as_str()))
+            .collect();
+        self.frames
+            .iter()
+            .filter(|frame| arrived.get(&frame.pts) == Some(&frame.hash.as_str()))
+            .map(|frame| frame.pts)
+            .collect()
     }
 }
 

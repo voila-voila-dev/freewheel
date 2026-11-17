@@ -14,7 +14,7 @@ use std::net::Ipv4Addr;
 use std::path::Path;
 use std::process::ExitCode;
 
-use packet_capture::LabRun;
+use packet_capture::{LabRun, median};
 
 const USAGE: &str = "usage: bench-srtla <bench directory> [--json <file>]";
 const UPSTREAM: &str = "upstream";
@@ -238,20 +238,6 @@ fn medians(samples: &[Sample]) -> Medians {
         link_drop_damaged_frames: median_of(|s| s.link_drop_damaged_frames),
         link_drop_gap_ms: median_of(|s| s.link_drop_gap_ms),
         link_drop_restored_share_percent: median_of(|s| s.link_drop_restored_share_percent),
-    }
-}
-
-fn median(values: impl Iterator<Item = f64>) -> f64 {
-    let mut values: Vec<f64> = values.collect();
-    if values.is_empty() {
-        return f64::NAN;
-    }
-    values.sort_by(f64::total_cmp);
-    let middle = values.len() / 2;
-    if values.len() % 2 == 1 {
-        values[middle]
-    } else {
-        f64::midpoint(values[middle - 1], values[middle])
     }
 }
 
