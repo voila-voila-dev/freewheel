@@ -47,7 +47,8 @@ fi
 readonly MAHIMAHI_TRACES=https://raw.githubusercontent.com/ravinet/mahimahi/master/traces
 scenario_files=()
 for scenario in "${scenarios[@]}"; do scenario_files+=("$lab/scenarios/$scenario.sh"); done
-grep -ho 'mahimahi/[A-Za-z0-9.-]*' "${scenario_files[@]}" 2> /dev/null | sort -u | while read -r trace; do
+# grep finds nothing when no requested scenario replays a trace: not an error.
+{ grep -ho 'mahimahi/[A-Za-z0-9.-]*' "${scenario_files[@]}" 2> /dev/null || true; } | sort -u | while read -r trace; do
 	if [ ! -s "$root/.cache/traces/$trace" ]; then
 		mkdir -p "$(dirname "$root/.cache/traces/$trace")"
 		curl -fsSL "$MAHIMAHI_TRACES/${trace#mahimahi/}" -o "$root/.cache/traces/$trace"
