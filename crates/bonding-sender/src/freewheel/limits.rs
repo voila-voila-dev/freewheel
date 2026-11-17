@@ -26,6 +26,11 @@ pub const MAX_EXPECTED_ARRIVAL_US: u64 = 1_000_000;
 /// earliest link only if it would arrive within this: beyond, it would sit in a modem queue
 /// that SRT reads as clock drift and answers by delaying the whole stream.
 pub const MAX_OVERFLOW_ARRIVAL_US: u64 = 500_000;
+/// A link that has not filled its congestion window for this long is assumed to carry at
+/// least the average rate of the usable links: what it delivers only says what it was given,
+/// so without this floor any split of a stream over fast links would stay as it is, and a
+/// link that comes back would never get its share back.
+pub const WINDOW_FULL_MEMORY_US: u64 = 1_000_000;
 /// RTT assumed before a link has measured one (a typical LTE uplink).
 pub const INITIAL_RTT_US: u64 = 100_000;
 /// Rate assumed for a link that has delivered little yet, and the floor of every estimate,

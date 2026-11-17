@@ -19,11 +19,14 @@ use packet_capture::{LabRun, median};
 const USAGE: &str =
     "usage: bench-transport <bench directory> [--json <file>] [--gate <receiver>-<sender>]";
 const BASELINE: &str = "upstream-upstream";
-/// irlserver: the other open source sender, the bar for a restored link (M1b).
-const IRLSERVER: &str = "upstream-irlserver";
 /// The scenario where one link dies and comes back alone: the only one whose restored link
 /// share means something (in `all-links-drop` every link comes back at once).
 const RESTORED_LINK_SCENARIO: &str = "link-drop";
+/// Its two links are alike, so a restored link's fair share is half the traffic...
+const RESTORED_LINK_EVEN_SHARE_PERCENT: f64 = 50.0;
+/// ...and it must be back to at least this much of it. Not "at least irlserver's": irlserver
+/// overshoots (up to 77 % of the traffic on the link that came back), which is no better.
+const RESTORED_LINK_MIN_OF_EVEN: f64 = 0.9;
 const MARKS_SUFFIX: &str = ".marks";
 
 /// Frames lost on one scenario may exceed the baseline's by this share, or by
@@ -294,14 +297,14 @@ fn gate(results: &Results, candidate: &str) -> Vec<String> {
                 ours.latency_p99_ms <= baseline.latency_p99_ms + TAIL_LATENCY_SLACK_MS,
             ),
         ];
-        // A restored link's share (`link-drop`): at least the baseline's and irlserver's.
-        let restored_bar = [Some(baseline), get(IRLSERVER)]
-            .into_iter()
-            .flatten()
-            .map(|reference| reference.restored_share_percent)
-            .filter(|share| !share.is_nan())
-            .reduce(f64::max);
-        let restored_check = restored_bar.map(|bar| {
+        // A restored link's share (`link-drop`): close to an even split, and the baseline's.
+        let restored_check = (!ours.restored_share_percent.is_nan()).then(|| {
+            let even_bar = RESTORED_LINK_EVEN_SHARE_PERCENT * RESTORED_LINK_MIN_OF_EVEN;
+            let bar = if baseline.restored_share_percent.is_nan() {
+                even_bar
+            } else {
+                even_bar.max(baseline.restored_share_percent)
+            };
             (
                 "restored link share (%)",
                 ours.restored_share_percent,

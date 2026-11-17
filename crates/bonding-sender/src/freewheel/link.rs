@@ -23,6 +23,8 @@ pub struct Link {
     pub(crate) stalled: bool,
     pub(crate) last_ack_us: u64,
     pub(crate) last_sent_us: u64,
+    /// Last time the scheduler found it with a full congestion window.
+    pub(crate) last_window_full_us: Option<u64>,
     pub(crate) estimate: LinkEstimate,
     pub(crate) in_flight: InFlight,
 }
@@ -40,6 +42,7 @@ impl Link {
             stalled: false,
             last_ack_us: 0,
             last_sent_us: 0,
+            last_window_full_us: None,
             estimate: LinkEstimate::new(),
             in_flight: InFlight::new(),
         }

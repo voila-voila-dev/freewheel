@@ -10,6 +10,7 @@ use bonding_protocol::freewheel::{
 use super::limits::{
     HOUSEKEEPING_PERIOD_US, JOIN_RETRY_US, KEEPALIVE_IDLE_US, MAX_EXPECTED_ARRIVAL_US,
     MAX_OVERFLOW_ARRIVAL_US, OPEN_RETRY_US, STALL_MAX_US, STALL_MIN_US, STALL_RTT_MULTIPLE,
+    WINDOW_FULL_MEMORY_US,
 };
 use super::link::Link;
 use super::link_estimate::wrapped_us;
@@ -133,7 +134,7 @@ impl Sender {
             return;
         }
         let size_bytes = (datagram.len() + MAX_DATAGRAM_LEN - MAX_DATA_PAYLOAD_LEN) as u64;
-        let Some(index) = self.choose_link(size_bytes) else {
+        let Some(index) = self.choose_link(now_us, size_bytes) else {
             return;
         };
         let sequence = self.next_sequence;
@@ -309,23 +310,45 @@ impl Sender {
 
     /// The usable link where a packet of `size_bytes` should arrive first, preferring links
     /// within their congestion window; when every link is full, the earliest anyway, unless
-    /// even that one would deliver it after [`MAX_EXPECTED_ARRIVAL_US`]: then none.
-    fn choose_link(&self, size_bytes: u64) -> Option<usize> {
+    /// even that one would deliver it after [`MAX_OVERFLOW_ARRIVAL_US`]: then none. A link
+    /// that has not filled its window lately counts at least the average rate of the usable
+    /// links ([`WINDOW_FULL_MEMORY_US`]); one found full is remembered as such.
+    fn choose_link(&mut self, now_us: u64, size_bytes: u64) -> Option<usize> {
+        let (usable, rate_sum_bps) = self
+            .links
+            .iter()
+            .filter(|link| link.usable())
+            .fold((0_u64, 0_u64), |(count, sum), link| {
+                (count + 1, sum + link.estimate.rate_bps())
+            });
+        let average_rate_bps = rate_sum_bps / usable.max(1);
         let mut best_within: Option<(usize, u64)> = None;
         let mut best_any: Option<(usize, u64)> = None;
-        for (index, link) in self.links.iter().enumerate() {
+        for (index, link) in self.links.iter_mut().enumerate() {
             if !link.usable() {
                 continue;
             }
+            let proven_full = link
+                .last_window_full_us
+                .is_some_and(|at_us| now_us.saturating_sub(at_us) < WINDOW_FULL_MEMORY_US);
+            let rate_bps = if proven_full {
+                link.estimate.rate_bps()
+            } else {
+                link.estimate.rate_bps().max(average_rate_bps)
+            };
             let in_flight_bytes = link.in_flight.bytes();
-            let arrival_us = link
-                .estimate
-                .expected_arrival_us(in_flight_bytes, size_bytes);
+            let arrival_us =
+                link.estimate
+                    .expected_arrival_us(in_flight_bytes, size_bytes, rate_bps);
             let better = |best: Option<(usize, u64)>| best.is_none_or(|(_, at)| arrival_us < at);
             if better(best_any) {
                 best_any = Some((index, arrival_us));
             }
-            let within = in_flight_bytes + size_bytes <= link.estimate.congestion_window_bytes();
+            let within =
+                in_flight_bytes + size_bytes <= link.estimate.congestion_window_bytes(rate_bps);
+            if !within {
+                link.last_window_full_us = Some(now_us);
+            }
             if within && better(best_within) {
                 best_within = Some((index, arrival_us));
             }

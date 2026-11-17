@@ -152,3 +152,24 @@ fn keeps_a_saturated_modem_queue_short_so_srt_does_not_read_it_as_clock_drift() 
         slowest_us / MS
     );
 }
+
+#[test]
+fn a_restored_link_gets_an_even_share_back_when_no_link_is_full() {
+    let mut network = Network::new(&[
+        LinkSpec::new(20 * MS, 50 * MBPS),
+        LinkSpec::new(20 * MS, 50 * MBPS),
+    ]);
+    network.run(500 * MS, 0);
+    network.run(5 * S, 3 * MBPS);
+    network.set_up(1, false);
+    network.run(5 * S, 3 * MBPS);
+    network.set_up(1, true);
+    network.run(2 * S, 3 * MBPS);
+    network.take_data_counts();
+    network.run(3 * S, 3 * MBPS);
+    let counts = network.take_data_counts();
+    assert!(
+        counts[1] * 100 >= (counts[0] + counts[1]) * 45,
+        "what a link delivers only says what it was given, not what it can carry: {counts:?}"
+    );
+}

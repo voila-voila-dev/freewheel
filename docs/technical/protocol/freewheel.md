@@ -97,6 +97,16 @@ first: half the smoothed RTT plus the time to drain what that link has in flight
 stretched by its loss. Links within their window are preferred; when all are full, the earliest
 anyway (live video cannot wait), but only if it should arrive within 500 ms.
 
+**What a link delivers only says what it was given.** On links faster than the stream, the
+delivery rate measures the share the scheduler gave each link, not what it could carry: every
+split is then stable, and a link that came back stayed at 25–45 % of the traffic (CI run
+44179514166: 43 % median, 30 % on one run). So a link that has not filled its window for 1 s
+counts at least the average rate of the usable links, for its drain time and its window; one
+found full keeps its own estimate for a second. Two alike links then split evenly, and a weak
+link still proves its limit by filling its window. 3 local runs: a restored link at 48–50 %
+(against 30–46 %), real-ride 48–68 frames lost (baseline 49–70 in CI), trace-drive 525,
+trace-city 0–3 (0 before).
+
 **Late is dropped, not queued.** A live packet whose best expected arrival is over 1 s (half of
 SRT's 2 s latency, so one retransmission still fits) is dropped at the box. The first version
 queued it anyway: on `trace-drive` the modems' queues then held seconds of stale video after
@@ -119,7 +129,7 @@ This replaces SRTLA's 4 s timeout and its slow window ramp.
 Tested on a simulated network (`crates/bonding-sender/tests/freewheel_transport.rs`): it prefers
 the link that arrives first, spreads a stream no single link can carry, moves off a link whose
 capacity collapses, leaves a dead link and takes it back within 200 ms, keeps late video out of
-a modem's queue, keeps a saturated queue under 700 ms. Nothing allocates per packet (`freewheel_zero_allocations.rs`).
+a modem's queue, keeps a saturated queue under 700 ms, gives a restored link an even share back on fast links. Nothing allocates per packet (`freewheel_zero_allocations.rs`).
 
 First lab results (2026-11-17, one local run on OrbStack, against the local baseline runs):
 
@@ -140,7 +150,11 @@ After the 500 ms bound (CI run 44151066706, 3 runs): trace-drive 1743 → **497*
 the same seconds when two of three links are cut (90–93 s, 2 Mbit/s left for 3.4), 49 to 61
 frames from run to run; the gate now allows +5 % or +3 frames per scenario, the total must still
 be lower (742 against 2010). A restored link (`link-drop`) carries **48 %** of the traffic 15–25 s
-after it came back, against 40 % for irlserver and 13 % for the baseline: the gate holds it there.
+after it came back, against 40 % for irlserver and 13 % for the baseline. The next CI run gave
+43 % against irlserver's 55 %: run to run, ours ranged 30–46 % and irlserver's 42–77 %. Ours was
+stuck (the split above); irlserver overshoots, the link that comes back taking up to 3/4 of the
+traffic of two alike links, which is no better. The gate now asks for 90 % of the even share
+(45 % on `link-drop`'s two links) and at least the baseline's.
 
 **Longest gap on `trace-drive`: 6.4 s against 3.8 s**, not gated. From 17 to 24 s and 83 to 87 s
 the three traces together carry 0.4–2.4 Mbit/s for a 3.4 Mbit/s stream: no transport delivers

@@ -132,22 +132,22 @@ impl LinkEstimate {
         self.loss_permille.min(MAX_LOSS_PERMILLE)
     }
 
-    /// Bytes the link may have in flight: twice its bandwidth-delay product, at least
-    /// [`MIN_CONGESTION_WINDOW_BYTES`].
+    /// Bytes the link may have in flight at `rate_bps`: twice its bandwidth-delay product, at
+    /// least [`MIN_CONGESTION_WINDOW_BYTES`].
     #[must_use]
-    pub fn congestion_window_bytes(&self) -> u64 {
+    pub fn congestion_window_bytes(&self, rate_bps: u64) -> u64 {
         let min_rtt_us = self.min_rtt_us.unwrap_or(INITIAL_RTT_US);
-        let bdp_bytes = self.rate_bps() * min_rtt_us / MICROSECONDS_PER_SECOND / BITS_PER_BYTE;
+        let bdp_bytes = rate_bps * min_rtt_us / MICROSECONDS_PER_SECOND / BITS_PER_BYTE;
         (WINDOW_GAIN * bdp_bytes).max(MIN_CONGESTION_WINDOW_BYTES)
     }
 
     /// When a packet of `size_bytes` sent now would arrive, in microseconds from now, with
-    /// `in_flight_bytes` ahead of it: half an RTT, plus draining what is queued, stretched by
-    /// the loss (a lost packet arrives late, through SRT's retransmission).
+    /// `in_flight_bytes` ahead of it drained at `rate_bps`: half an RTT, plus draining what is
+    /// queued, stretched by the loss (a lost packet arrives late, through SRT's retransmission).
     #[must_use]
-    pub fn expected_arrival_us(&self, in_flight_bytes: u64, size_bytes: u64) -> u64 {
+    pub fn expected_arrival_us(&self, in_flight_bytes: u64, size_bytes: u64, rate_bps: u64) -> u64 {
         let drain_us = (in_flight_bytes + size_bytes) * BITS_PER_BYTE * MICROSECONDS_PER_SECOND
-            / self.rate_bps();
+            / rate_bps.max(1);
         let arrival_us = self.smoothed_rtt_us() / 2 + drain_us;
         arrival_us * LOSS_SCALE / (LOSS_SCALE - self.loss_permille())
     }
