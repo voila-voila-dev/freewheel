@@ -14,7 +14,7 @@ use std::fmt::Write as _;
 use std::path::Path;
 use std::process::ExitCode;
 
-use packet_capture::{LabRun, median};
+use packet_capture::{LabRun, median, spread};
 
 const USAGE: &str =
     "usage: bench-transport <bench directory> [--json <file>] [--gate <receiver>-<sender>]";
@@ -30,9 +30,11 @@ const RESTORED_LINK_MIN_OF_EVEN: f64 = 0.9;
 const MARKS_SUFFIX: &str = ".marks";
 
 /// Frames lost on one scenario may exceed the baseline's by this share, or by
-/// [`DAMAGED_SLACK_FRAMES`] if more: when the links cannot carry the stream (`real-ride`, two of
-/// three links cut), both lose the same seconds and the count is a coin toss between runs. The
-/// total over every scenario must still be lower.
+/// [`DAMAGED_SLACK_FRAMES`], or by the spread measured between runs of that scenario (the larger
+/// of the two combinations' ranges), whichever is more: when the links cannot carry the stream
+/// (`real-ride`, two of three links cut), both lose the same seconds and the count is a coin
+/// toss between runs (49 to 63 frames over four CI runs for either, 2026-11-18). Stable
+/// scenarios keep the tight bound. The total over every scenario must still be lower.
 const DAMAGED_SLACK_RATIO: f64 = 0.05;
 const DAMAGED_SLACK_FRAMES: f64 = 3.0;
 /// Delivered video may be this much below the baseline's: the encoder's own variation.
@@ -46,6 +48,8 @@ const TAIL_LATENCY_SLACK_MS: f64 = 50.0;
 struct Summary {
     runs: usize,
     damaged_frames: f64,
+    /// Largest minus smallest count of frames lost over the runs: the scenario's noise.
+    damaged_spread_frames: f64,
     longest_gap_ms: f64,
     delivered_kbps: f64,
     latency_median_ms: f64,
@@ -199,6 +203,7 @@ fn summary(samples: &[Sample]) -> Summary {
     Summary {
         runs: samples.len(),
         damaged_frames: median_of(|s| s.damaged_frames),
+        damaged_spread_frames: spread(samples.iter().filter_map(|s| s.damaged_frames)),
         longest_gap_ms: median_of(|s| s.longest_gap_ms),
         delivered_kbps: median_of(|s| s.delivered_kbps),
         latency_median_ms: median_of(|s| s.latency_median_ms),
@@ -276,7 +281,10 @@ fn gate(results: &Results, candidate: &str) -> Vec<String> {
                 baseline.damaged_frames,
                 ours.damaged_frames
                     <= baseline.damaged_frames
-                        + (baseline.damaged_frames * DAMAGED_SLACK_RATIO).max(DAMAGED_SLACK_FRAMES),
+                        + (baseline.damaged_frames * DAMAGED_SLACK_RATIO)
+                            .max(DAMAGED_SLACK_FRAMES)
+                            .max(ours.damaged_spread_frames)
+                            .max(baseline.damaged_spread_frames),
             ),
             (
                 "delivered (kbit/s)",

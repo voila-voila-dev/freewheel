@@ -16,6 +16,18 @@ pub fn median(values: impl IntoIterator<Item = f64>) -> f64 {
     }
 }
 
+/// Largest minus smallest value: how far apart a handful of runs landed. `NaN` when there are
+/// no values.
+#[must_use]
+pub fn spread(values: impl IntoIterator<Item = f64>) -> f64 {
+    let (low, high) = values
+        .into_iter()
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(low, high), value| {
+            (low.min(value), high.max(value))
+        });
+    if low > high { f64::NAN } else { high - low }
+}
+
 /// Nearest-rank percentile (`percent` in 0–100) of values sorted in ascending order, `NaN` when
 /// there are none.
 #[must_use]

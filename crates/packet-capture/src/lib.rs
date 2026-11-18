@@ -46,5 +46,5 @@ pub use process_resources::ProcessResources;
 pub use srt_statistics::SrtStatistics;
 pub use srtla_event::SrtlaEvent;
 pub use srtla_report::SrtlaReport;
-pub use statistics::{median, percentile_of_sorted};
+pub use statistics::{median, percentile_of_sorted, spread};
 pub use udp_datagram::UdpDatagram;

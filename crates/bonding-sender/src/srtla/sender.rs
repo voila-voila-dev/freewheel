@@ -237,6 +237,7 @@ impl Sender {
         {
             self.registering = None;
         }
+        self.retry_registration(second, io);
         for index in 0..self.links.len() {
             self.check_link(second, index, io);
         }
@@ -360,6 +361,37 @@ impl Sender {
         self.registration_quiet_until_s = Some(now_s + REGISTRATION_TIMEOUT_S);
     }
 
+    /// A pending REG1 still unanswered at housekeeping goes out again on the next open link that
+    /// has not heard from the receiver, which becomes the pending one (the same link when it is
+    /// the only one).
+    ///
+    /// Upstream sends it again on the same link. When only the REG2 answer was lost, the
+    /// receiver already holds a group for that address and refuses every new REG1 from it
+    /// (`REG_ERR`), so registration stalls until that orphan group expires, 10 to 13 s later.
+    /// From another address, the next REG1 opens a fresh group at once.
+    fn retry_registration(&mut self, now_s: u64, io: &mut impl SenderIo) {
+        let Some(pending) = self.registering.and_then(|handle| self.index_of(handle)) else {
+            return;
+        };
+        let count = self.links.len();
+        let next = (1..=count)
+            .map(|step| (pending + step) % count)
+            .find(|&index| {
+                self.links
+                    .get(index)
+                    .is_some_and(|link| link.open && link.activity.timed_out(now_s))
+            });
+        let Some(handle) = next
+            .and_then(|index| self.links.get(index))
+            .map(|link| link.handle)
+        else {
+            return;
+        };
+        if self.send_registration(handle, PacketType::Reg1, io) {
+            self.registering = Some(handle);
+        }
+    }
+
     /// Sends REG1 or REG2 (with the current id) on a link; `false` if it did not leave.
     fn send_registration(
         &self,
@@ -476,14 +508,8 @@ impl Sender {
                 link.in_flight_packets = 0;
                 link.log.clear();
             }
-            match registering {
-                None => {
-                    self.send_registration(handle, PacketType::Reg2, io);
-                }
-                Some(pending) if pending == handle => {
-                    self.send_registration(handle, PacketType::Reg1, io);
-                }
-                Some(_) => {}
+            if registering.is_none() {
+                self.send_registration(handle, PacketType::Reg2, io);
             }
             return;
         }

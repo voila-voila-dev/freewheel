@@ -127,22 +127,36 @@ fn reg_ngp_is_ignored_once_a_link_works_and_for_4_s_after_registering() -> TestR
 }
 
 #[test]
-fn a_pending_reg1_is_sent_again_each_second_then_expires() -> TestResult {
+fn a_pending_reg1_moves_to_the_next_link_each_second_then_expires() -> TestResult {
     let mut io = FakeIo::default();
     let mut sender = sender_on(&[1, 2], &mut io)?;
     sender.housekeeping(0, &mut io);
     let (one, two) = (link(&sender, 1)?, link(&sender, 2)?);
     sender.handle_link_datagram(0, one, &answer(PacketType::RegNgp), &mut io);
     io.take_sent();
+    let reg1 = registration(PacketType::Reg1, &proposed_id());
     sender.housekeeping(1_000, &mut io);
     assert_eq!(
         io.take_sent(),
-        vec![Sent::OnLink(
-            one,
-            RECEIVER,
-            registration(PacketType::Reg1, &proposed_id())
-        )],
-        "REG1 again on the pending link, nothing on the others"
+        vec![Sent::OnLink(two, RECEIVER, reg1.clone())],
+        "REG1 again from another address: the receiver may hold a group for the first one"
+    );
+    sender.handle_link_datagram(
+        1_100,
+        one,
+        &registration(PacketType::Reg2, &full_id()),
+        &mut io,
+    );
+    assert_eq!(
+        sender.group_id(),
+        &proposed_id(),
+        "a late REG2 on the old link is ignored"
+    );
+    sender.housekeeping(2_000, &mut io);
+    assert_eq!(
+        io.take_sent(),
+        vec![Sent::OnLink(one, RECEIVER, reg1)],
+        "and back to the first link"
     );
     sender.housekeeping(5_000, &mut io);
     let sent = io.take_sent();
@@ -153,6 +167,54 @@ fn a_pending_reg1_is_sent_again_each_second_then_expires() -> TestResult {
             registration(PacketType::Reg2, &proposed_id())
         )),
         "after 4 s the REG1 expires and every link sends REG2 again"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_lone_link_sends_its_pending_reg1_again() -> TestResult {
+    let mut io = FakeIo::default();
+    let mut sender = sender_on(&[1], &mut io)?;
+    sender.housekeeping(0, &mut io);
+    let one = link(&sender, 1)?;
+    sender.handle_link_datagram(0, one, &answer(PacketType::RegNgp), &mut io);
+    io.take_sent();
+    sender.housekeeping(1_000, &mut io);
+    assert_eq!(
+        io.take_sent(),
+        vec![Sent::OnLink(
+            one,
+            RECEIVER,
+            registration(PacketType::Reg1, &proposed_id())
+        )]
+    );
+    Ok(())
+}
+
+#[test]
+fn a_link_that_got_reg_err_is_skipped_by_the_retry() -> TestResult {
+    let mut io = FakeIo::default();
+    let mut sender = sender_on(&[1, 2, 3], &mut io)?;
+    sender.housekeeping(0, &mut io);
+    let (one, two, three) = (link(&sender, 1)?, link(&sender, 2)?, link(&sender, 3)?);
+    // Links are listed newest first (3, 2, 1): after 3 comes 2, which heard REG_ERR.
+    sender.handle_link_datagram(0, three, &answer(PacketType::RegNgp), &mut io);
+    sender.handle_link_datagram(500, two, &answer(PacketType::RegErr), &mut io);
+    io.take_sent();
+    sender.housekeeping(1_000, &mut io);
+    let reg1: Vec<_> = io
+        .take_sent()
+        .into_iter()
+        .filter(|sent| matches!(sent, Sent::OnLink(_, _, bytes) if *bytes == registration(PacketType::Reg1, &proposed_id())))
+        .collect();
+    assert_eq!(
+        reg1,
+        vec![Sent::OnLink(
+            one,
+            RECEIVER,
+            registration(PacketType::Reg1, &proposed_id())
+        )],
+        "REG_ERR counts as heard (upstream): that link is not the next to try"
     );
     Ok(())
 }

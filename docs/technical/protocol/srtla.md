@@ -252,6 +252,10 @@ Design inputs for M1b (`freewheel.md`). Compatibility mode reproduces upstream a
   when SRT hiccups. Never give up: keep the session, buffer, retry.
 - **No buffering before registration**: the first seconds of video are lost on a cold start.
 - **REG_ERR counted as activity**: a refused link is used as a black hole.
+- **Fragile start**: one lost REG2 answer stalls registration 10–13 s (REG1 is retried from
+  the same address, which already owns a group); compatibility mode retries on another link.
+  The lab's SRT listener (`srt-live-transmit`) adds its own: a lost handshake answer leaves
+  it deaf ~5 s. Registration must survive any single loss, and be retried on every link.
 - **Partial ACK batches**: never flushed, so at low bitrate `in_flight` stays inflated.
 - **RTT**: keepalives and ACKs carry no timestamps; nothing measures per-link latency.
 - **Overflow on slowdown**: a link whose capacity drops keeps its window until losses pile up
@@ -330,6 +334,12 @@ upstream and not visible in the captures:
   declares it failed.
 - **Link failed** (housekeeping): window 1 000, nothing in flight, log emptied; then every
   second REG2 with the current id, or REG1 again if it is the link whose REG1 is pending.
+  Second deliberate difference (2026-11-18): ours sends that REG1 again on the **next** failed
+  link, which becomes the pending one (the same link when it is alone). Upstream repeats it
+  from the same address: when only the REG2 answer was lost, the receiver already holds a
+  group for that address and answers REG_ERR, so the box stays unregistered until the orphan
+  group expires, 10–13 s later (seen in `random-loss`: 5 % loss on link 2, start 6–20 s late).
+  Both receivers accept a REG1 from a new address at once.
 - **Registration**: `REG_NGP` (any length) sends REG1 only when the last housekeeping counted
   no usable link and no REG3 arrived since, no REG1 is pending, and the last registration step
   is more than 4 s old. A REG2 counts only on the link that sent REG1. REG3 at any length
