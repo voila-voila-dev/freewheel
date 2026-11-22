@@ -4,6 +4,7 @@ use bonding_protocol::freewheel::{LinkId, SessionId};
 
 use super::limits::MAX_LINKS_PER_SESSION;
 use super::link::Link;
+use super::received_window::ReceivedWindow;
 use crate::srtla::GroupHandle;
 
 /// One sender's stream and the links carrying it.
@@ -19,6 +20,8 @@ pub struct Session {
     pub(crate) next_sequence: u32,
     /// Since when it has had no link (or when it was created).
     pub(crate) empty_since_us: u64,
+    /// Which recent sequences arrived, on any link.
+    pub(crate) received: ReceivedWindow,
 }
 
 impl Session {
@@ -31,6 +34,7 @@ impl Session {
             return_link: None,
             next_sequence: 0,
             empty_since_us: now_us,
+            received: ReceivedWindow::new(),
         }
     }
 

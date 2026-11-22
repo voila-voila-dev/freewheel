@@ -3,17 +3,18 @@
 use std::net::{Ipv4Addr, SocketAddrV4};
 
 use bonding_protocol::freewheel::{
-    CloseReason, Data, Header, MAX_DATA_PAYLOAD_LEN, MAX_DATAGRAM_LEN, Packet, SessionId,
-    TrafficClass,
+    CloseReason, Data, Header, MAX_DATA_PAYLOAD_LEN, MAX_DATAGRAM_LEN, Packet, SequenceRanges,
+    SessionId, TrafficClass,
 };
 
 use super::limits::{
-    HOUSEKEEPING_PERIOD_US, JOIN_RETRY_US, KEEPALIVE_IDLE_US, MAX_EXPECTED_ARRIVAL_US,
-    MAX_OVERFLOW_ARRIVAL_US, OPEN_RETRY_US, STALL_MAX_US, STALL_MIN_US, STALL_RTT_MULTIPLE,
-    WINDOW_FULL_MEMORY_US,
+    HOUSEKEEPING_PERIOD_US, JOIN_RETRY_US, KEEPALIVE_IDLE_US, LOST_CAPACITY,
+    MAX_EXPECTED_ARRIVAL_US, MAX_OVERFLOW_ARRIVAL_US, OPEN_RETRY_US, RETRANSMIT_DEADLINE_US,
+    STALL_MAX_US, STALL_MIN_US, STALL_RTT_MULTIPLE, WINDOW_FULL_MEMORY_US,
 };
 use super::link::Link;
 use super::link_estimate::wrapped_us;
+use super::sent_payloads::SentPayloads;
 use crate::srtla::{LinkHandle, SenderEvent, SenderIo};
 
 /// What the outside world may know about one link (for the event loop and tests).
@@ -33,7 +34,9 @@ pub struct FreewheelLinkStatus {
     pub in_flight_bytes: u64,
 }
 
-/// The freewheel sender: one session, spread over every link by expected arrival time.
+/// The freewheel sender: one session, spread over every link by expected arrival time; a
+/// live packet found lost is sent again on the link where it arrives first, while it can
+/// still arrive within [`RETRANSMIT_DEADLINE_US`].
 ///
 /// Feed it every datagram with the time in microseconds of a monotonic clock, and call
 /// [`housekeeping`](Self::housekeeping) at least every [`HOUSEKEEPING_PERIOD_US`]. It only
@@ -48,12 +51,16 @@ pub struct Sender {
     srt_caller: Option<SocketAddrV4>,
     next_sequence: u32,
     last_housekeeping_us: Option<u64>,
+    sent_payloads: SentPayloads,
+    /// Sequences found lost and not yet dealt with; never grows past its capacity.
+    lost: Vec<u32>,
+    retransmitted_packets: u64,
 }
 
 impl Sender {
     /// A sender with no links yet, for the session `session_id` (random, from the box).
     #[must_use]
-    pub const fn new(session_id: SessionId, receiver: SocketAddrV4) -> Self {
+    pub fn new(session_id: SessionId, receiver: SocketAddrV4) -> Self {
         Self {
             session_id,
             receiver,
@@ -63,6 +70,9 @@ impl Sender {
             srt_caller: None,
             next_sequence: 0,
             last_housekeeping_us: None,
+            sent_payloads: SentPayloads::new(),
+            lost: Vec::with_capacity(LOST_CAPACITY),
+            retransmitted_packets: 0,
         }
     }
 
@@ -133,42 +143,20 @@ impl Sender {
         if datagram.len() > MAX_DATA_PAYLOAD_LEN {
             return;
         }
-        let size_bytes = (datagram.len() + MAX_DATAGRAM_LEN - MAX_DATA_PAYLOAD_LEN) as u64;
-        let Some(index) = self.choose_link(now_us, size_bytes) else {
+        let Some(index) = self.choose_link(now_us, wire_bytes(datagram), u64::MAX) else {
             return;
         };
         let sequence = self.next_sequence;
         self.next_sequence = self.next_sequence.wrapping_add(1);
-        let (session_id, receiver) = (self.session_id, self.receiver);
+        self.sent_payloads.keep(sequence, now_us, datagram);
+        let route = self.route();
         let Some(link) = self.links.get_mut(index) else {
             return;
         };
-        let packet = Packet::Data(Data {
-            header: Header {
-                session_id,
-                link_id: link.id,
-            },
-            class: TrafficClass::Live,
-            sequence,
-            sent_at_us: wrapped_us(now_us),
-            payload: datagram,
-        });
-        if !send_packet(io, link.handle, receiver, &packet) {
-            stall(
-                link,
-                io,
-                SenderEvent::SendFailed {
-                    source: link.source,
-                },
-            );
-            return;
+        if !send_data(link, &mut self.lost, route, sequence, datagram, now_us, io) {
+            self.lost.push(sequence);
+            self.retransmit_lost(now_us, io);
         }
-        if link.in_flight.is_empty() {
-            link.last_ack_us = link.last_ack_us.max(now_us);
-        }
-        link.last_sent_us = now_us;
-        link.in_flight
-            .push(sequence, u16::try_from(size_bytes).unwrap_or(u16::MAX));
     }
 
     /// A datagram from the receiver, on a link's socket.
@@ -197,15 +185,21 @@ impl Sender {
                 }
             }
             Packet::Ack(ack) => {
-                let Some(link) = self.link_by_id(ack.header.link_id) else {
+                let Some(link) = self.links.iter_mut().find(|l| l.id == ack.header.link_id) else {
                     return;
                 };
                 if !link.joined || link.stalled {
                     accept(link, now_us, io);
                 }
-                let left_flight_bytes = link.in_flight.acknowledge(ack.timing.largest_sequence);
+                let largest = ack.timing.largest_sequence;
+                let left_flight_bytes = link.in_flight.acknowledge(
+                    largest,
+                    |sequence| missing(&ack.ranges, largest, sequence),
+                    &mut self.lost,
+                );
                 link.estimate.on_ack(now_us, ack.timing, left_flight_bytes);
                 link.last_ack_us = now_us;
+                self.retransmit_lost(now_us, io);
             }
             Packet::Close { .. } => {
                 if let Some(link) = self.links.iter_mut().find(|l| l.handle == link) {
@@ -262,6 +256,7 @@ impl Sender {
             {
                 stall(
                     link,
+                    &mut self.lost,
                     io,
                     SenderEvent::LinkFailed {
                         source: link.source,
@@ -278,6 +273,13 @@ impl Sender {
                 }
             }
         }
+        self.retransmit_lost(now_us, io);
+    }
+
+    /// Live packets sent again so far.
+    #[must_use]
+    pub const fn retransmitted_packets(&self) -> u64 {
+        self.retransmitted_packets
     }
 
     /// The links, in the order they were added.
@@ -304,8 +306,51 @@ impl Sender {
         self.receiver
     }
 
+    const fn route(&self) -> Route {
+        Route {
+            session_id: self.session_id,
+            receiver: self.receiver,
+        }
+    }
+
     fn link_by_id(&mut self, id: u8) -> Option<&mut Link> {
         self.links.iter_mut().find(|link| link.id == id)
+    }
+
+    /// Sends again every packet found lost that is still kept and can still arrive within
+    /// [`RETRANSMIT_DEADLINE_US`] of its first sending, each on the link where it arrives
+    /// first; the others are given up (SRT's own retransmission may still save them).
+    fn retransmit_lost(&mut self, now_us: u64, io: &mut impl SenderIo) {
+        let mut lost = core::mem::take(&mut self.lost);
+        let mut next = 0;
+        while let Some(sequence) = lost.get(next).copied() {
+            next += 1;
+            let Some((first_sent_us, payload)) = self.sent_payloads.get(sequence) else {
+                continue;
+            };
+            let Some(time_left_us) = (first_sent_us + RETRANSMIT_DEADLINE_US).checked_sub(now_us)
+            else {
+                continue;
+            };
+            let size_bytes = wire_bytes(payload);
+            let Some(index) = self.choose_link(now_us, size_bytes, time_left_us) else {
+                continue;
+            };
+            let route = self.route();
+            let (Some(link), Some((_, payload))) =
+                (self.links.get_mut(index), self.sent_payloads.get(sequence))
+            else {
+                continue;
+            };
+            if send_data(link, &mut lost, route, sequence, payload, now_us, io) {
+                self.retransmitted_packets += 1;
+            } else if lost.len() < lost.capacity() {
+                // That link stalled and added its flight to `lost`; this one tries another.
+                lost.push(sequence);
+            }
+        }
+        lost.clear();
+        self.lost = lost;
     }
 
     /// The usable link where a packet of `size_bytes` should arrive first, preferring links
@@ -313,7 +358,10 @@ impl Sender {
     /// even that one would deliver it after [`MAX_OVERFLOW_ARRIVAL_US`]: then none. A link
     /// that has not filled its window lately counts at least the average rate of the usable
     /// links ([`WINDOW_FULL_MEMORY_US`]); one found full is remembered as such.
-    fn choose_link(&mut self, now_us: u64, size_bytes: u64) -> Option<usize> {
+    /// `max_arrival_us` narrows both bounds further (a retransmission's time left); a
+    /// retransmission never overflows a window: it rides on spare capacity only, or it would
+    /// push new video out and fill the modem queues SRT reads as clock drift.
+    fn choose_link(&mut self, now_us: u64, size_bytes: u64, max_arrival_us: u64) -> Option<usize> {
         let (usable, rate_sum_bps) = self
             .links
             .iter()
@@ -354,8 +402,12 @@ impl Sender {
             }
         }
         best_within
-            .filter(|(_, arrival_us)| *arrival_us <= MAX_EXPECTED_ARRIVAL_US)
-            .or_else(|| best_any.filter(|(_, arrival_us)| *arrival_us <= MAX_OVERFLOW_ARRIVAL_US))
+            .filter(|(_, arrival_us)| *arrival_us <= MAX_EXPECTED_ARRIVAL_US.min(max_arrival_us))
+            .or_else(|| {
+                best_any.filter(|(_, arrival_us)| {
+                    max_arrival_us == u64::MAX && *arrival_us <= MAX_OVERFLOW_ARRIVAL_US
+                })
+            })
             .map(|(index, _)| index)
     }
 }
@@ -371,11 +423,78 @@ fn accept(link: &mut Link, now_us: u64, io: &mut impl SenderIo) {
     link.last_ack_us = now_us;
 }
 
-fn stall(link: &mut Link, io: &mut impl SenderIo, event: SenderEvent) {
+/// Where a session's packets go.
+#[derive(Debug, Clone, Copy)]
+struct Route {
+    session_id: SessionId,
+    receiver: SocketAddrV4,
+}
+
+/// The link stops carrying data; what it had in flight goes to `lost`, to be sent again.
+fn stall(link: &mut Link, lost: &mut Vec<u32>, io: &mut impl SenderIo, event: SenderEvent) {
     link.stalled = true;
-    link.in_flight.clear();
+    link.in_flight.drain(lost);
     link.estimate.on_stall();
     io.report(event);
+}
+
+/// Sends one live packet on `link` and counts it in flight; on failure the link stalls (its
+/// flight goes to `lost`) and `false` is returned.
+fn send_data(
+    link: &mut Link,
+    lost: &mut Vec<u32>,
+    route: Route,
+    sequence: u32,
+    payload: &[u8],
+    now_us: u64,
+    io: &mut impl SenderIo,
+) -> bool {
+    let packet = Packet::Data(Data {
+        header: Header {
+            session_id: route.session_id,
+            link_id: link.id,
+        },
+        class: TrafficClass::Live,
+        sequence,
+        sent_at_us: wrapped_us(now_us),
+        payload,
+    });
+    if !send_packet(io, link.handle, route.receiver, &packet) {
+        stall(
+            link,
+            lost,
+            io,
+            SenderEvent::SendFailed {
+                source: link.source,
+            },
+        );
+        return false;
+    }
+    if link.in_flight.is_empty() {
+        link.last_ack_us = link.last_ack_us.max(now_us);
+    }
+    link.last_sent_us = now_us;
+    link.in_flight.push(
+        sequence,
+        u16::try_from(wire_bytes(payload)).unwrap_or(u16::MAX),
+    );
+    true
+}
+
+/// Bytes a live packet of `payload` takes on the wire.
+const fn wire_bytes(payload: &[u8]) -> u64 {
+    (payload.len() + MAX_DATAGRAM_LEN - MAX_DATA_PAYLOAD_LEN) as u64
+}
+
+/// `sequence` is known lost from an ACK whose link last delivered `largest`: within the
+/// span its ranges cover, below `largest`, and in none of them. Outside the span, nothing
+/// is known.
+fn missing(ranges: &SequenceRanges<'_>, largest: u32, sequence: u32) -> bool {
+    let Some(oldest) = ranges.iter().next() else {
+        return false;
+    };
+    let within = |first: u32, last: u32| sequence.wrapping_sub(first) <= last.wrapping_sub(first);
+    within(oldest.first, largest) && !ranges.iter().any(|range| within(range.first, range.last))
 }
 
 /// Encodes and sends one packet on a link; `false` if it did not leave whole.

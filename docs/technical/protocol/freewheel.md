@@ -164,6 +164,32 @@ many more frames overall (1754) but lets an intact one through now and then, whi
 gaps short. The answer is lowering the encoder's bitrate when the links cannot carry it, not
 the scheduler.
 
+## Deadline-aware retransmission (M1b step 4)
+
+SRT already retransmits end to end, but late: its listener waits for reordering
+(`lossmaxttl=40`), then a NAK crosses back, then the caller resends through the box. The box
+knows sooner, and knows which link arrives first.
+
+**What the server reports.** Each session keeps a window of the last 1 024 sequences, one bit
+each. An ACK for a link carries the runs received in the session at and below the last
+sequence that link delivered, newest first, at most 64 runs. A sequence that arrives twice is
+dropped before SRT.
+
+**What the box calls lost.** One link is a queue: what it sent before the last sequence it
+delivered has arrived or never will. So, on each ACK, every packet that link had in flight
+before that sequence, within the span the ranges cover and in none of them, is lost. Outside
+the span nothing is known, and nothing is resent. When a link stalls, its whole flight is lost.
+
+**When it is resent.** The box keeps the last 4 096 live payloads (6 MB). A lost packet goes out
+again, same sequence, on the link where it should arrive first (same choice as new data), only
+if it can still arrive within 1.5 s of its first sending: three quarters of SRT's 2 s latency.
+Later, it is given up, and SRT's own retransmission is still there.
+
+Tested on a simulated network (`crates/bonding-sender/tests/freewheel_retransmission.rs`):
+5 % loss on every link is fully repaired with no duplicate reaching SRT, the flight of a link
+that dies goes out again on the other, and a loss seen too late (700 ms one way) is not resent.
+The window: `crates/bonding-receiver/tests/freewheel_received_window.rs`.
+
 ## Alternative to evaluate
 
 Multipath QUIC with datagrams (IETF draft): a standard, but a large dependency and less control over media-aware scheduling.

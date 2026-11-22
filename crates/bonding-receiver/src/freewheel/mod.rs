@@ -7,13 +7,15 @@
 
 mod limits;
 mod link;
+mod received_window;
 mod receiver;
 mod session;
 
 pub use limits::{
-    ACK_EVERY_PACKETS, ACK_MAX_DELAY_US, LINK_TIMEOUT_US, MAX_LINKS_PER_SESSION, MAX_SESSIONS,
-    SESSION_TIMEOUT_US,
+    ACK_EVERY_PACKETS, ACK_MAX_DELAY_US, ACK_RANGES, LINK_TIMEOUT_US, MAX_LINKS_PER_SESSION,
+    MAX_SESSIONS, RECEIVED_WINDOW_SEQUENCES, SESSION_TIMEOUT_US,
 };
+pub use received_window::{Arrival, ReceivedWindow};
 pub use receiver::Receiver;
 
 pub use crate::srtla::{GroupHandle, IoFailure, ReceiverEvent, ReceiverIo};

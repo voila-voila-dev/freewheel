@@ -3,14 +3,15 @@
 use std::net::SocketAddrV4;
 
 use bonding_protocol::freewheel::{
-    Ack, CloseReason, Data, Header, MAX_DATAGRAM_LEN, Packet, TrafficClass,
+    Ack, CloseReason, Data, Header, MAX_DATAGRAM_LEN, Packet, SequenceRange, TrafficClass,
 };
 
 use super::limits::{
-    ACK_EVERY_PACKETS, ACK_MAX_DELAY_US, LINK_TIMEOUT_US, MAX_LINKS_PER_SESSION, MAX_SESSIONS,
-    SESSION_TIMEOUT_US,
+    ACK_EVERY_PACKETS, ACK_MAX_DELAY_US, ACK_RANGES, LINK_TIMEOUT_US, MAX_LINKS_PER_SESSION,
+    MAX_SESSIONS, SESSION_TIMEOUT_US,
 };
 use super::link::Link;
+use super::received_window::{Arrival, ReceivedWindow};
 use super::session::Session;
 use crate::srtla::{GroupHandle, GroupRemoval, ReceiverEvent, ReceiverIo, Refusal};
 
@@ -53,15 +54,15 @@ impl Receiver {
             Ok(Packet::Join(header)) => self.join(now_us, from, header, io),
             Ok(Packet::Data(data)) => self.receive_data(now_us, from, &data, datagram.len(), io),
             Ok(Packet::Keepalive { header, sent_at_us }) => {
-                let Some((_, link)) = self.heard(now_us, from, header, io) else {
+                let Some((index, link)) = self.heard(now_us, from, header, io) else {
                     return;
                 };
                 link.latest_sent_at_us = sent_at_us;
                 link.latest_arrival_us = now_us;
+                link.unacknowledged_packets = 0;
                 let link = *link;
-                send_ack(io, header.session_id, &link, now_us);
-                if let Some(link) = self.find_link(header) {
-                    link.unacknowledged_packets = 0;
+                if let Some(session) = self.sessions.get(index) {
+                    send_ack(io, session.id, &link, &session.received, now_us);
                 }
             }
             Ok(Packet::Close { header, .. }) => self.close_link(now_us, header),
@@ -120,7 +121,7 @@ impl Receiver {
                 if link.unacknowledged_packets > 0
                     && now_us.saturating_sub(link.latest_arrival_us) >= ACK_MAX_DELAY_US
                 {
-                    send_ack(io, session_id, link, now_us);
+                    send_ack(io, session_id, link, &session.received, now_us);
                     link.unacknowledged_packets = 0;
                 }
             }
@@ -218,15 +219,22 @@ impl Receiver {
             .received_bytes
             .wrapping_add(u32::try_from(datagram_len).unwrap_or(u32::MAX));
         link.unacknowledged_packets += 1;
-        if link.unacknowledged_packets >= ACK_EVERY_PACKETS {
+        let acknowledge = link.unacknowledged_packets >= ACK_EVERY_PACKETS;
+        if acknowledge {
             link.unacknowledged_packets = 0;
-            let link = *link;
-            send_ack(io, data.header.session_id, &link, now_us);
         }
+        let link = *link;
         let Some(session) = self.sessions.get_mut(index) else {
             return;
         };
+        let arrival = session.received.record(data.sequence);
+        if acknowledge {
+            send_ack(io, session.id, &link, &session.received, now_us);
+        }
         session.return_link = Some(data.header.link_id);
+        if arrival == Arrival::Duplicate {
+            return;
+        }
         let handle = session.handle;
         if !session.srt_open {
             if io.open_srt(handle).is_err() {
@@ -272,13 +280,6 @@ impl Receiver {
         index.map(|index| (index, link))
     }
 
-    fn find_link(&mut self, header: Header) -> Option<&mut Link> {
-        self.sessions
-            .iter_mut()
-            .find(|session| session.id == header.session_id)
-            .and_then(|session| session.link_mut(header.link_id))
-    }
-
     fn close_link(&mut self, now_us: u64, header: Header) {
         if let Some(session) = self
             .sessions
@@ -322,13 +323,24 @@ fn send_packet(io: &mut impl ReceiverIo, to: SocketAddrV4, packet: &Packet<'_>) 
     }
 }
 
-fn send_ack(io: &mut impl ReceiverIo, session_id: u64, link: &Link, now_us: u64) {
+/// Acknowledges `link`: its timing, and the runs received in the session at and below the
+/// last sequence it delivered, so the sender sees what that link lost.
+fn send_ack(
+    io: &mut impl ReceiverIo,
+    session_id: u64,
+    link: &Link,
+    received: &ReceivedWindow,
+    now_us: u64,
+) {
     let header = Header {
         session_id,
         link_id: link.id,
     };
+    let mut ranges = [SequenceRange::default(); ACK_RANGES];
+    let count = received.ranges_below(link.latest_sequence, &mut ranges);
+    let ranges = ranges.get(..count).unwrap_or(&[]);
     let mut out = [0u8; MAX_DATAGRAM_LEN];
-    let Some(datagram) = Ack::encode(header, link.timing(now_us), &[], &mut out)
+    let Some(datagram) = Ack::encode(header, link.timing(now_us), ranges, &mut out)
         .ok()
         .and_then(|len| out.get(..len))
     else {

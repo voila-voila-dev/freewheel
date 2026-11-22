@@ -44,3 +44,12 @@ pub const RATE_SAMPLE_PERIOD_US: u64 = 100_000;
 pub const RATE_SAMPLES: usize = 10;
 /// Packets one link remembers until they are acknowledged: 300 ms at 50 Mbit/s.
 pub const IN_FLIGHT_CAPACITY: usize = 2_048;
+/// A lost live packet is sent again only if it should still arrive within this of its first
+/// sending: three quarters of SRT's 2 s latency, the rest left to the listener's drift
+/// correction and the link's jitter. Later, SRT's own retransmission or nothing.
+pub const RETRANSMIT_DEADLINE_US: u64 = 1_500_000;
+/// Live payloads kept for retransmission (6 MB): 13 s of a 3.4 Mbit/s stream, still more
+/// than [`RETRANSMIT_DEADLINE_US`] at 30 Mbit/s.
+pub const SENT_PAYLOADS_CAPACITY: usize = 4_096;
+/// Packets found lost at once, at most: every link's whole flight.
+pub const LOST_CAPACITY: usize = 4 * IN_FLIGHT_CAPACITY;

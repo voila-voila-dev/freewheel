@@ -48,6 +48,8 @@ struct SimLink {
     up: bool,
     busy_until_us: u64,
     data_packets: u64,
+    /// Every this many data packets, one is lost on the uplink (0: none).
+    lose_every: u64,
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
@@ -176,6 +178,7 @@ impl Network {
                     up: true,
                     busy_until_us: 0,
                     data_packets: 0,
+                    lose_every: 0,
                 })
                 .collect(),
             handles,
@@ -238,6 +241,18 @@ impl Network {
         if let Some(sim) = self.links.get_mut(link) {
             sim.up = up;
         }
+    }
+
+    /// Loses one data packet in `every` on a link's uplink (0: none).
+    pub fn set_lose_every(&mut self, link: usize, every: u64) {
+        if let Some(sim) = self.links.get_mut(link) {
+            sim.lose_every = every;
+        }
+    }
+
+    /// Live packets the sender sent again so far.
+    pub const fn retransmitted(&self) -> u64 {
+        self.sender.retransmitted_packets()
     }
 
     /// Changes a link's uplink rate.
@@ -351,6 +366,9 @@ impl Network {
             sim.busy_until_us = start_us + serialisation_us;
             if datagram.get(1) == Some(&0x01) {
                 sim.data_packets += 1;
+                if sim.lose_every > 0 && sim.data_packets % sim.lose_every == 0 {
+                    continue;
+                }
             }
             let at_us = sim.busy_until_us + sim.spec.delay_us;
             self.schedule(at_us, Delivery::ToReceiver { link, datagram });
