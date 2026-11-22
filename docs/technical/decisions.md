@@ -50,6 +50,7 @@ One line per decision, newest last. A third-party dependency needs an entry here
 - 2026-11-11 — Each bonding crate keeps its SRTLA-specific code in one `srtla` module (`bonding-protocol`, `bonding-receiver`, later `bonding-sender`); refines the single-module entry above.
 - 2026-11-11 — Interop is judged by the lab: `RECEIVER=freewheel` runs the 35 scenarios with our receiver in place of `srtla_rec` (same command line), and the same characterisation tests must pass on those captures. Same plan for the sender.
 - 2026-11-11 — `net-sys` also wraps `setsockopt(SO_SNDBUF)` (upstream's 8 MB send buffer per link) and `signal(SIGHUP)` (belaUI reloads the sender's link list with it; std has neither). Still the only bonding crate with `unsafe`; one `SAFETY:` comment per call. The sender's link sockets are non-blocking, as upstream's: a full buffer is a failed send, which disables the link.
+- 2026-11-22 — M1b step 4, deadline-aware retransmission (ACK ranges, duplicate window on the server, resend within 1.5 s on spare window only): not kept. CI, 3 runs (run 45048513790) against step 3: `trace-drive` 511 frames lost against 517, `real-ride` 63 against 61, `all-links-drop` 186 against 186, within run-to-run spread. The frames we lose are lost while the links carry less than the stream, where a resend on spare window has nowhere to go. Kept on branch `m1b-step-4`; next, adaptive FEC.
 
 ## Open
 
