@@ -46,8 +46,8 @@ pub struct ControllerSettings {
 }
 
 impl ControllerSettings {
-    /// The lab's stream: `max_bps` of 720p30 video at most, and `other_bps` beside it (its
-    /// adaptive pipeline carries no audio: 0).
+    /// The lab's stream: `max_bps` of 720p30 video at most, and `other_bps` beside it (the
+    /// audio).
     #[must_use]
     pub const fn lab(max_bps: u32, other_bps: u32) -> Self {
         Self {

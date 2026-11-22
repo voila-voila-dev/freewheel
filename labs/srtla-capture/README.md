@@ -106,8 +106,7 @@ the bitrate `bitrate_control::Controller` picks from the capacity reports `freew
 sends it (`/tmp/freewheel-capacity.1.sock`), and ffmpeg puts it in MPEG-TS. `ENCODER=fixed` keeps
 ffmpeg's fixed bitrate with our transport (step 3), `ENCODER=adaptive` forces the other.
 Every bitrate it takes is a mark, `encoder bitrate <bit/s>`; `LAB_ENCODER_LOG_REPORTS=1` marks
-every report too. No audio on that path (`decisions.md`): its video ceiling is `$BITRATE` +
-128 kbit/s instead.
+every report too. The audio comes from its own ffmpeg, live, through a FIFO (`decisions.md`).
 
 ### Frame times and latency
 

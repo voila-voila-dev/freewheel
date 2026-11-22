@@ -36,8 +36,7 @@ esac
 # ENCODER=fixed: ffmpeg's libx264 at $BITRATE, whatever the links do. ENCODER=adaptive (the
 # default with SENDER=transport, M1b step 5): our lab-encoder (crates/h264-encoder), whose bitrate
 # follows the capacity reports freewheel-sender sends to $CAPACITY_SOCKET_PREFIX.<s>.sock, with
-# $BITRATE plus the audio's share as its ceiling (no audio, see start_stream). Either way ffmpeg
-# makes the test pattern and the MPEG-TS. LAB_ENCODER_LOG_REPORTS=1 also marks every report.
+# $BITRATE as its ceiling. Either way ffmpeg makes the test pattern, the audio and the MPEG-TS. LAB_ENCODER_LOG_REPORTS=1 also marks every report.
 if [ "${SENDER:-upstream}" = transport ]; then ENCODER=${ENCODER:-adaptive}; else ENCODER=${ENCODER:-fixed}; fi
 case "$ENCODER" in
 	fixed | adaptive) readonly ENCODER ;;
@@ -48,7 +47,8 @@ case "$ENCODER" in
 esac
 readonly LAB_ENCODER=/opt/freewheel/lab-encoder
 readonly CAPACITY_SOCKET_PREFIX=/tmp/freewheel-capacity
-# The fixed encoder's audio, which the adaptive one gives to its video (start_stream).
+readonly AUDIO_FIFO_PREFIX=/tmp/freewheel-audio
+# The test tone, AAC at 44.1 kHz (1024 samples a frame), with either encoder.
 readonly AUDIO_BPS=128000
 # Dates each video frame on both ends (crates/packet-capture, `frame-times`), mounted by run-all.sh.
 readonly FRAME_TIMES=/opt/freewheel/frame-times
@@ -148,18 +148,23 @@ start_stream() {
 	local outputs="[f=mpegts]udp://127.0.0.1:$((7000 + sender))?pkt_size=1316|[f=mpegts]$OUT/$SCENARIO.sent.$sender.ts"
 	if [ "$ENCODER" = adaptive ]; then
 		# Raw frames → lab-encoder (its bitrate marks go to the marks file) → ffmpeg puts it in
-		# MPEG-TS. The muxer reads the video by the wall clock (a raw H.264 pipe has no
-		# timestamps: otherwise it holds the video back ~25 s), then setts numbers the frames at
-		# 30 per second (two frames read in the same millisecond would share a timestamp, which
-		# MPEG-TS refuses). No audio: muxed with this pipe, ffmpeg sends the video in bursts with
-		# 100–250 ms holes, ~3 a second, which SRT turns into late frames. The video may take the
-		# audio's 128 kbit/s instead, so the stream weighs the same on the links.
-		local ceiling_bps=$(($(bitrate_bps "$BITRATE") + AUDIO_BPS))
+		# MPEG-TS with the audio, made live by its own ffmpeg into a FIFO. Both inputs are read
+		# by the wall clock (a raw H.264 pipe has no timestamps: otherwise the muxer holds the
+		# video back ~25 s), then setts numbers their packets at their own rate (two frames read
+		# in the same millisecond would share a timestamp, which MPEG-TS refuses). Audio made by
+		# the muxer itself instead runs on another clock, and the muxer then sends the video in
+		# bursts with 100–250 ms holes, ~3 a second, which SRT turns into late frames.
+		local audio_fifo="$AUDIO_FIFO_PREFIX.$sender.aac"
+		rm -f "$audio_fifo"
+		mkfifo "$audio_fifo"
+		ffmpeg -loglevel error -re -f lavfi -i sine=frequency=440 -t "$seconds" \
+			-c:a aac -b:a "$AUDIO_BPS" -f adts -y "$audio_fifo" 2>> "$OUT/$SCENARIO.ffmpeg.log" &
 		in_box sh -c "ffmpeg -loglevel error -re -f lavfi -i testsrc2=size=1280x720:rate=30 -t $seconds -f rawvideo -pix_fmt yuv420p - \
-			| $LAB_ENCODER --width 1280 --height 720 --fps 30 --keyint 60 --max-bitrate $ceiling_bps \
-				--capacity-socket $CAPACITY_SOCKET_PREFIX.$sender.sock 2>> $OUT/$SCENARIO.marks \
-			| ffmpeg -loglevel error -probesize 100000 -analyzeduration 0 -f h264 -framerate 30 \
-				-use_wallclock_as_timestamps 1 -i - -map 0:v -c:v copy -bsf:v 'setts=ts=N/(30*TB)' -t $seconds \
+			| $LAB_ENCODER --width 1280 --height 720 --fps 30 --keyint 60 --max-bitrate $(bitrate_bps "$BITRATE") \
+				--audio-bitrate $AUDIO_BPS --capacity-socket $CAPACITY_SOCKET_PREFIX.$sender.sock 2>> $OUT/$SCENARIO.marks \
+			| ffmpeg -loglevel error -probesize 100000 -analyzeduration 0 -f h264 -framerate 30 -use_wallclock_as_timestamps 1 -i - \
+				-probesize 32 -analyzeduration 0 -use_wallclock_as_timestamps 1 -f aac -i $audio_fifo \
+				-map 0:v -map 1:a -c copy -bsf:v 'setts=ts=N/(30*TB)' -bsf:a 'setts=ts=N*1024/(44100*TB)' -t $seconds \
 				-f tee '$outputs'" \
 			2>> "$OUT/$SCENARIO.ffmpeg.log" &
 	else
