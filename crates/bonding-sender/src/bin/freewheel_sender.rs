@@ -1,15 +1,22 @@
 //! `freewheel-sender SRT_LISTEN_PORT RECEIVER_HOST RECEIVER_PORT BIND_IPS_FILE`: our own
 //! transport (M1b), with the same command line as `bonding-sender`.
+//!
+//! With `FREEWHEEL_CAPACITY_SOCKET=<path>` in its environment, it also sends a capacity report
+//! (`bitrate_control::CapacityReport`, JSON) to that Unix datagram socket every 100 ms, for
+//! the encoder's bitrate.
 
 use std::net::{Ipv4Addr, UdpSocket};
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::atomic::AtomicBool;
 
 use bonding_sender::freewheel::Sender;
 use bonding_sender::server::{
-    FREEWHEEL_WAKE_INTERVAL, SenderConfig, UdpIo, random_session_id, read_source_list,
-    serve_freewheel,
+    CapacityOutput, FREEWHEEL_WAKE_INTERVAL, SenderConfig, UdpIo, random_session_id,
+    read_source_list, serve_freewheel,
 };
+
+const CAPACITY_SOCKET_VARIABLE: &str = "FREEWHEEL_CAPACITY_SOCKET";
 
 fn main() -> ExitCode {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
@@ -52,9 +59,19 @@ fn run(arguments: &[String]) -> Result<(), String> {
         ));
     }
     net_sys::catch_hangup().map_err(|error| format!("cannot catch SIGHUP: {error}"))?;
+    let capacity_path = std::env::var_os(CAPACITY_SOCKET_VARIABLE).map(PathBuf::from);
+    let capacity = capacity_path
+        .as_deref()
+        .map(CapacityOutput::new)
+        .transpose()
+        .map_err(|error| format!("cannot open a Unix socket: {error}"))?;
     eprintln!(
-        "freewheel-sender: SRT on port {}, receiver at {receiver}",
-        config.listen_port
+        "freewheel-sender: SRT on port {}, receiver at {receiver}{}",
+        config.listen_port,
+        capacity_path
+            .as_deref()
+            .map(|path| format!(", capacity to {}", path.display()))
+            .unwrap_or_default()
     );
     serve_freewheel(
         &mut sender,
@@ -63,6 +80,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
         FREEWHEEL_WAKE_INTERVAL,
         net_sys::hangup_flag(),
         &AtomicBool::new(false),
+        capacity.as_ref(),
     )
     .map_err(|error| format!("freewheel-sender stopped: {error}"))
 }

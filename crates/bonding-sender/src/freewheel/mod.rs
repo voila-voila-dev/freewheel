@@ -17,6 +17,6 @@ pub use limits::{
     STALL_MIN_US, STALL_RTT_MULTIPLE,
 };
 pub use link_estimate::LinkEstimate;
-pub use sender::{FreewheelLinkStatus, Sender};
+pub use sender::{FreewheelLinkStatus, QUEUING_ARRIVAL_US, Sender};
 
 pub use crate::srtla::{IoFailure, LinkHandle, SenderEvent, SenderIo};

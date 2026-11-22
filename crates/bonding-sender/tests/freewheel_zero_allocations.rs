@@ -1,5 +1,5 @@
-//! The freewheel per-packet path allocates nothing, on either side: the count does not grow
-//! with traffic.
+//! The freewheel per-packet path allocates nothing, on either side, capacity reports for the
+//! encoder included: the count does not grow with traffic.
 
 use std::net::{Ipv4Addr, SocketAddrV4};
 
@@ -169,6 +169,10 @@ fn stream(packets: u32) -> usize {
         );
         sender.housekeeping(now_us, &mut to_receiver);
         receiver.housekeeping(now_us, &mut to_sender);
+        if number % 300 == 0 {
+            let mut report = [0u8; bitrate_control::MAX_REPORT_LEN];
+            let _ = sender.capacity_report(now_us).encode(&mut report);
+        }
         exchange(
             now_us,
             &mut sender,

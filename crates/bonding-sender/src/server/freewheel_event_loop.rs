@@ -4,10 +4,12 @@
 use std::fs::File;
 use std::io::Read;
 use std::net::SocketAddr;
+use std::os::unix::net::UnixDatagram;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+use bitrate_control::MAX_REPORT_LEN;
 use bonding_protocol::freewheel::{MAX_DATAGRAM_LEN, SessionId};
 use net_sys::{ReadinessSlot, wait_until_readable};
 
@@ -22,6 +24,40 @@ const RANDOMNESS_PATH: &str = "/dev/urandom";
 /// Longest wait without a datagram, so housekeeping (keepalives, stall checks) runs on time.
 pub const FREEWHEEL_WAKE_INTERVAL: Duration = Duration::from_micros(HOUSEKEEPING_PERIOD_US);
 
+/// How often the sender tells the encoder what the links carry.
+pub const CAPACITY_REPORT_PERIOD: Duration = Duration::from_millis(100);
+
+/// Where capacity reports go: a Unix datagram socket the encoder listens on.
+#[derive(Debug)]
+pub struct CapacityOutput<'a> {
+    /// The encoder's socket.
+    pub path: &'a Path,
+    socket: UnixDatagram,
+}
+
+impl<'a> CapacityOutput<'a> {
+    /// An unbound socket that sends to `path`.
+    ///
+    /// # Errors
+    /// No Unix socket available.
+    pub fn new(path: &'a Path) -> std::io::Result<Self> {
+        Ok(Self {
+            path,
+            socket: UnixDatagram::unbound()?,
+        })
+    }
+
+    /// Sends one report; a missing or busy encoder is not an error (it reads the next one).
+    fn send(&self, sender: &mut Sender, now_us: u64) {
+        let mut out = [0u8; MAX_REPORT_LEN];
+        if let Some(len) = sender.capacity_report(now_us).encode(&mut out)
+            && let Some(report) = out.get(..len)
+        {
+            let _ = self.socket.send_to(report, self.path);
+        }
+    }
+}
+
 /// A random session id, from the system's randomness.
 ///
 /// # Errors
@@ -34,7 +70,8 @@ pub fn random_session_id() -> std::io::Result<SessionId> {
 
 /// Serves the freewheel transport until `stop` is set. Same shape as the SRTLA loop
 /// ([`serve`](super::serve)): reload on `reload`, housekeeping, wait, then one datagram from
-/// the SRT caller and one from each ready link. Nothing allocates per packet.
+/// the SRT caller and one from each ready link; every [`CAPACITY_REPORT_PERIOD`], a capacity
+/// report to `capacity` if there is one. Nothing allocates per packet.
 ///
 /// # Errors
 /// See [`ServeError`].
@@ -45,12 +82,15 @@ pub fn serve_freewheel(
     wake_interval: Duration,
     reload: &AtomicBool,
     stop: &AtomicBool,
+    capacity: Option<&CapacityOutput<'_>>,
 ) -> Result<(), ServeError> {
     let started = Instant::now();
     let now_us = || u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
     let mut buffer = [0u8; MAX_DATAGRAM_LEN];
     let mut slots: Vec<ReadinessSlot> = Vec::new();
     let mut ready_links: Vec<LinkHandle> = Vec::new();
+    let report_period_us = u64::try_from(CAPACITY_REPORT_PERIOD.as_micros()).unwrap_or(u64::MAX);
+    let mut next_report_us = 0;
     while !stop.load(Ordering::Relaxed) {
         if reload.swap(false, Ordering::Relaxed) {
             let sources = read_source_list(source_list).map_err(|error| {
@@ -62,6 +102,12 @@ pub fn serve_freewheel(
             sender.reload_sources(&sources, io);
         }
         sender.housekeeping(now_us(), io);
+        if let Some(capacity) = capacity
+            && now_us() >= next_report_us
+        {
+            capacity.send(sender, now_us());
+            next_report_us = now_us() + report_period_us;
+        }
 
         slots.clear();
         slots.push(ReadinessSlot::new(io.listen_socket()));

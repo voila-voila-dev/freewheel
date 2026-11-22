@@ -2,6 +2,7 @@
 
 use std::net::{Ipv4Addr, SocketAddrV4};
 
+use bitrate_control::CapacityReport;
 use bonding_protocol::freewheel::{
     CloseReason, Data, Header, MAX_DATA_PAYLOAD_LEN, MAX_DATAGRAM_LEN, Packet, SessionId,
     TrafficClass,
@@ -48,6 +49,18 @@ pub struct Sender {
     srt_caller: Option<SocketAddrV4>,
     next_sequence: u32,
     last_housekeeping_us: Option<u64>,
+    /// Since the last [`capacity_report`](Self::capacity_report): live bytes sent, sent to
+    /// arrive late (queuing), and dropped at the box.
+    traffic: Traffic,
+}
+
+/// Live bytes counted since the last capacity report, and when that was.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct Traffic {
+    since_us: Option<u64>,
+    sent_bytes: u64,
+    overflow_bytes: u64,
+    dropped_bytes: u64,
 }
 
 impl Sender {
@@ -63,6 +76,12 @@ impl Sender {
             srt_caller: None,
             next_sequence: 0,
             last_housekeeping_us: None,
+            traffic: Traffic {
+                since_us: None,
+                sent_bytes: 0,
+                overflow_bytes: 0,
+                dropped_bytes: 0,
+            },
         }
     }
 
@@ -134,7 +153,8 @@ impl Sender {
             return;
         }
         let size_bytes = (datagram.len() + MAX_DATAGRAM_LEN - MAX_DATA_PAYLOAD_LEN) as u64;
-        let Some(index) = self.choose_link(now_us, size_bytes) else {
+        let Some((index, arrival_us)) = self.choose_link(now_us, size_bytes) else {
+            self.traffic.dropped_bytes += size_bytes;
             return;
         };
         let sequence = self.next_sequence;
@@ -169,6 +189,44 @@ impl Sender {
         link.last_sent_us = now_us;
         link.in_flight
             .push(sequence, u16::try_from(size_bytes).unwrap_or(u16::MAX));
+        self.traffic.sent_bytes += size_bytes;
+        if arrival_us > QUEUING_ARRIVAL_US {
+            self.traffic.overflow_bytes += size_bytes;
+        }
+    }
+
+    /// What the links carried since the last call, for the encoder's bitrate
+    /// (`bitrate-control`): the usable links' estimated rates, and the live data sent, sent to
+    /// arrive after [`QUEUING_ARRIVAL_US`] (queuing: a window full is not enough, the stream's
+    /// bursts fill them on links with room to spare) and dropped, as rates over the period. The
+    /// first call only starts the period.
+    pub fn capacity_report(&mut self, now_us: u64) -> CapacityReport {
+        let (usable_links, capacity_bps) = self
+            .links
+            .iter()
+            .filter(|link| link.usable())
+            .fold((0_u8, 0_u64), |(count, sum), link| {
+                (count.saturating_add(1), sum + link.estimate.rate_bps())
+            });
+        let traffic = core::mem::take(&mut self.traffic);
+        self.traffic.since_us = Some(now_us);
+        let period_us = traffic
+            .since_us
+            .map_or(0, |since_us| now_us.saturating_sub(since_us));
+        let rate = |bytes: u64| {
+            if period_us == 0 {
+                0
+            } else {
+                bytes * BITS_PER_BYTE * MICROSECONDS_PER_SECOND / period_us
+            }
+        };
+        CapacityReport {
+            capacity_bps,
+            sent_bps: rate(traffic.sent_bytes),
+            overflow_bps: rate(traffic.overflow_bytes),
+            dropped_bps: rate(traffic.dropped_bytes),
+            usable_links,
+        }
     }
 
     /// A datagram from the receiver, on a link's socket.
@@ -312,8 +370,9 @@ impl Sender {
     /// within their congestion window; when every link is full, the earliest anyway, unless
     /// even that one would deliver it after [`MAX_OVERFLOW_ARRIVAL_US`]: then none. A link
     /// that has not filled its window lately counts at least the average rate of the usable
-    /// links ([`WINDOW_FULL_MEMORY_US`]); one found full is remembered as such.
-    fn choose_link(&mut self, now_us: u64, size_bytes: u64) -> Option<usize> {
+    /// links ([`WINDOW_FULL_MEMORY_US`]); one found full is remembered as such. Also says
+    /// when the packet should arrive, in microseconds from now.
+    fn choose_link(&mut self, now_us: u64, size_bytes: u64) -> Option<(usize, u64)> {
         let (usable, rate_sum_bps) = self
             .links
             .iter()
@@ -356,9 +415,15 @@ impl Sender {
         best_within
             .filter(|(_, arrival_us)| *arrival_us <= MAX_EXPECTED_ARRIVAL_US)
             .or_else(|| best_any.filter(|(_, arrival_us)| *arrival_us <= MAX_OVERFLOW_ARRIVAL_US))
-            .map(|(index, _)| index)
     }
 }
+
+/// A packet expected to arrive later than this is queuing in a modem: the links carry less
+/// than the stream (the capacity report's `overflow_bps`). An idle link's RTT is 40–160 ms in
+/// the lab.
+pub const QUEUING_ARRIVAL_US: u64 = 250_000;
+const BITS_PER_BYTE: u64 = 8;
+const MICROSECONDS_PER_SECOND: u64 = 1_000_000;
 
 fn accept(link: &mut Link, now_us: u64, io: &mut impl SenderIo) {
     if !link.joined || link.stalled {

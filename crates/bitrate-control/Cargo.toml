@@ -1,6 +1,6 @@
 [package]
 name = "bitrate-control"
-description = "Pure adaptive bitrate controller driven by SRT link statistics"
+description = "Pure adaptive bitrate controller driven by the transport's capacity reports"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

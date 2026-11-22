@@ -30,10 +30,13 @@ if [ "$sender" = irlserver ]; then target=bench; fi
 # Created here, as the runner user: the build container runs as root and would own them.
 mkdir -p "$out/runs" "$root/.cache/lab-target"
 # Built for Linux in the same Debian as the lab, so they run there unchanged: our receiver and
-# sender, and frame-times, which dates each video frame on both ends (every combination).
+# sender, frame-times, which dates each video frame on both ends (every combination), and
+# lab-encoder, against the libx264 the lab's ffmpeg already uses.
 docker run --rm -v "$root:/src" -w /src -v freewheel-cargo-registry:/usr/local/cargo/registry \
 	-e CARGO_TARGET_DIR=/src/.cache/lab-target rust:1.94.0-slim-trixie \
-	sh -c "cargo build --quiet --release --locked -p bonding-receiver -p bonding-sender && cargo build --quiet --release --locked -p packet-capture --bin frame-times"
+	sh -c "apt-get update -qq && apt-get install --yes -qq --no-install-recommends libx264-dev > /dev/null \
+		&& cargo build --quiet --release --locked -p bonding-receiver -p bonding-sender -p h264-encoder \
+		&& cargo build --quiet --release --locked -p packet-capture --bin frame-times"
 mounts=(-v "$root/.cache/lab-target/release:/opt/freewheel:ro")
 
 docker build -q --target "$target" -t "freewheel-srtla-$target" "$lab" > /dev/null
@@ -59,7 +62,7 @@ mounts+=(-v "$root/.cache/traces:/opt/traces:ro")
 
 run_one() {
 	local scenario=$1
-	if docker run --rm --privileged -e RECEIVER="$receiver" -e SENDER="$sender" -e DISCARD_VIDEO="${DISCARD_VIDEO:-0}" -e CAPTURE_SNAPLEN="${CAPTURE_SNAPLEN:-0}" ${mounts[@]+"${mounts[@]}"} -v "$out:/out" "freewheel-srtla-$target" "$scenario" > "$out/runs/$scenario.log" 2>&1; then
+	if docker run --rm --privileged -e RECEIVER="$receiver" -e SENDER="$sender" -e DISCARD_VIDEO="${DISCARD_VIDEO:-0}" -e CAPTURE_SNAPLEN="${CAPTURE_SNAPLEN:-0}" -e ENCODER="${ENCODER:-}" -e LAB_ENCODER_LOG_REPORTS="${LAB_ENCODER_LOG_REPORTS:-}" ${mounts[@]+"${mounts[@]}"} -v "$out:/out" "freewheel-srtla-$target" "$scenario" > "$out/runs/$scenario.log" 2>&1; then
 		tail -1 "$out/runs/$scenario.log"
 	else
 		echo "$scenario: FAILED (see $out/runs/$scenario.log)"

@@ -39,9 +39,17 @@ name = "bonding-sender"
 version = "0.0.0"
 dependencies = [
  "alloc-counter",
+ "bitrate-control",
  "bonding-protocol",
  "bonding-receiver",
  "net-sys",
+]
+
+[[package]]
+name = "h264-encoder"
+version = "0.0.0"
+dependencies = [
+ "bitrate-control",
 ]
 
 [[package]]

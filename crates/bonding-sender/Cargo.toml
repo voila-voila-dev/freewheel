@@ -15,10 +15,12 @@ name = "freewheel-sender"
 path = "src/bin/freewheel_sender.rs"
 
 [dependencies]
+bitrate-control = { path = "../bitrate-control" }
 bonding-protocol = { path = "../bonding-protocol" }
 net-sys = { path = "../net-sys" }
 
 [dev-dependencies]
+bitrate-control = { path = "../bitrate-control" }
 alloc-counter = { path = "../alloc-counter" }
 bonding-receiver = { path = "../bonding-receiver" }
 

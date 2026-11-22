@@ -233,6 +233,11 @@ impl Network {
         }
     }
 
+    /// The simulated clock, in microseconds.
+    pub const fn now_us(&self) -> u64 {
+        self.now_us
+    }
+
     /// Cuts or restores a link, both ways.
     pub fn set_up(&mut self, link: usize, up: bool) {
         if let Some(sim) = self.links.get_mut(link) {

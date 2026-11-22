@@ -173,3 +173,46 @@ fn a_restored_link_gets_an_even_share_back_when_no_link_is_full() {
         "what a link delivers only says what it was given, not what it can carry: {counts:?}"
     );
 }
+
+#[test]
+fn tells_the_encoder_what_the_links_carry_and_when_they_cannot() {
+    let mut network = Network::new(&[
+        LinkSpec::new(30 * MS, 4 * MBPS),
+        LinkSpec::new(50 * MS, 4 * MBPS),
+    ]);
+    network.run(500 * MS, 0);
+    network.run(3 * S, 3 * MBPS);
+    let _ = network.sender.capacity_report(network.now_us());
+    network.run(S, 3 * MBPS);
+    let calm = network.sender.capacity_report(network.now_us());
+    assert_eq!(calm.usable_links, 2);
+    assert!(calm.sent_bps > 3 * MBPS, "{calm:?}");
+    assert!(calm.capacity_bps >= calm.sent_bps, "{calm:?}");
+    assert!(
+        calm.dropped_bps + calm.overflow_bps < calm.sent_bps / 50,
+        "{calm:?}"
+    );
+
+    network.set_rate(0, MBPS);
+    network.set_rate(1, MBPS);
+    network.run(2 * S, 3 * MBPS);
+    let _ = network.sender.capacity_report(network.now_us());
+    network.run(S, 3 * MBPS);
+    let short = network.sender.capacity_report(network.now_us());
+    assert!(
+        short.dropped_bps + short.overflow_bps > short.sent_bps / 10,
+        "{short:?}"
+    );
+    assert!(short.capacity_bps < 3 * MBPS, "{short:?}");
+}
+
+#[test]
+fn a_cut_leaves_no_usable_link_to_report() {
+    let mut network = Network::new(&[LinkSpec::new(30 * MS, 8 * MBPS)]);
+    network.run(500 * MS, 0);
+    network.run(2 * S, 3 * MBPS);
+    network.set_up(0, false);
+    network.run(2 * S, 3 * MBPS);
+    let report = network.sender.capacity_report(network.now_us());
+    assert_eq!(report.usable_links, 0, "{report:?}");
+}

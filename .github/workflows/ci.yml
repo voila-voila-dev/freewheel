@@ -10,6 +10,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: rustup show
+      # libx264 for the lab's adaptive encoder (crates/h264-encoder): without it, a stub builds.
+      - run: sudo apt-get update && sudo apt-get install -y libx264-dev
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
