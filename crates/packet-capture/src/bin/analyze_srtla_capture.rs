@@ -8,7 +8,9 @@
 use std::path::Path;
 use std::process::ExitCode;
 
-use packet_capture::{LAB_RECEIVER_PORT, LabRun, PcapFile, SrtlaReport, UdpDatagram};
+use packet_capture::{
+    LAB_RECEIVER_PORT, LabRun, NETEM_MARK_PREFIX, PcapFile, SrtlaReport, UdpDatagram,
+};
 
 const BOX_CAPTURE_SUFFIX: &str = ".box.pcap";
 const USAGE: &str = "usage: analyze-srtla-capture <directory> [scenario] | <capture.pcap>";
@@ -56,9 +58,16 @@ fn print_capture(path: &Path) -> Result<(), String> {
 fn print_scenario(directory: &Path, scenario: &str) -> Result<(), String> {
     let run = LabRun::load(directory, scenario).map_err(|error| error.to_string())?;
     println!("# {scenario}\n\n## Marks (ms since the first box packet)");
+    // `netem link …` marks come once a second per link during a trace replay: counted only.
+    let mut netem_settings = 0;
     for mark in &run.marks {
+        if mark.label.starts_with(NETEM_MARK_PREFIX) {
+            netem_settings += 1;
+            continue;
+        }
         println!("- {:>7}  {}", run.since_start_ms(mark), mark.label);
     }
+    println!("- {netem_settings} netem settings (`netem link …` marks)");
     println!("\n## SRT listener\n{:?}\n", run.srt);
     println!("# Box side\n\n{}", run.box_side);
     println!("# Server side\n\n{}", run.server_side);

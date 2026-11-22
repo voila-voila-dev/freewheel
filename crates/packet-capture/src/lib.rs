@@ -7,12 +7,15 @@
 //! - [`FrameCheck`]: the received video compared with what was sent, frame by frame.
 //! - [`FrameClock`], [`FrameTime`], [`FrameLatency`]: when each frame left the encoder and
 //!   reached the server, and the latency in between.
+//! - [`LossCauses`]: why each lost frame was lost (capacity, isolated losses, a dead link, a
+//!   queue), against the emulated network ([`EmulatedUplinks`]).
 //! - [`LabRun`]: everything one lab scenario produced (two captures, marks, SRT statistics).
 //!
 //! Lab and scenarios: `labs/srtla-capture/`. Findings: `docs/technical/protocol/srtla.md`.
 
 mod capture_error;
 mod captured_frame;
+mod emulated_uplinks;
 mod frame_check;
 mod frame_clock;
 mod frame_latency;
@@ -21,6 +24,7 @@ mod lab_run;
 mod lab_run_error;
 mod link_layer;
 mod link_stats;
+mod loss_causes;
 mod mark;
 mod pcap_file;
 mod process_resources;
@@ -32,6 +36,7 @@ mod udp_datagram;
 
 pub use capture_error::CaptureError;
 pub use captured_frame::CapturedFrame;
+pub use emulated_uplinks::{EmulatedUplinks, NETEM_MARK_PREFIX, UplinkSetting};
 pub use frame_check::{FrameCheck, FrameDigest, FrameDigests};
 pub use frame_clock::FrameClock;
 pub use frame_latency::FrameLatency;
@@ -40,6 +45,7 @@ pub use lab_run::{LAB_RECEIVER_PORT, LabRun};
 pub use lab_run_error::LabRunError;
 pub use link_layer::LinkLayer;
 pub use link_stats::LinkStats;
+pub use loss_causes::{LossCause, LossCauses, LossEvidence, SentPacket, WIRE_BYTES_PER_VIDEO_BYTE};
 pub use mark::Mark;
 pub use pcap_file::PcapFile;
 pub use process_resources::ProcessResources;

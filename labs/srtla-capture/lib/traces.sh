@@ -30,9 +30,9 @@ replay_trace() {
 		start=$(date +%s%N)
 		for rate in $rates; do
 			if [ "$rate" -eq 0 ]; then
-				in_net tc qdisc replace dev "s$k" root netem loss 100%
+				shape_link "$k" up "loss 100%"
 			else
-				in_net tc qdisc replace dev "s$k" root netem delay "$TRACE_ONE_WAY_DELAY" rate "${rate}kbit" limit "$TRACE_QUEUE_PACKETS"
+				shape_link "$k" up "delay $TRACE_ONE_WAY_DELAY rate ${rate}kbit limit $TRACE_QUEUE_PACKETS"
 			fi
 			step=$((step + 1))
 			remaining_ms=$(((start + step * NANOSECONDS_PER_SECOND - $(date +%s%N)) / 1000000))

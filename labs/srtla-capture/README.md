@@ -159,6 +159,17 @@ frame slack is for scenarios where the links cannot carry the stream (`real-ride
 links cut): every transport loses the same seconds there, and the count is a coin toss. The recording delivered after
 an outage is not measured yet: it needs the background traffic class. CI job `transport-bench`.
 
+A second table says why frames were lost (`packet_capture::LossCauses`), so the next mechanism
+goes where the frames are: **capacity** (the links together carried less than the stream that
+second, the one before or the one after), **recovery** (2–5 s after such a second, nothing lost
+on the way: the stream catching up), **isolated loss** (a packet of the frame lost on a link
+with random or bursty loss while capacity sufficed: what FEC repairs), **link down** (sent into
+a cut or dead link), **queue** (lost on a link that drops nothing at random) and **late**
+(everything arrived, too late). Capacity comes from the lab's marks: `shape_link` and every
+second of a trace replay write `netem link <k> <up|down|both>: <netem arguments>`; the stream's
+demand is the encoder's frame sizes × 1.18 (TS with the audio, SRT, our header, UDP/IP/Ethernet, measured on
+`trace-city`). Runs from before those marks (2026-11-22) get no second table.
+
 `crates/packet-capture/tests/lab/` holds one characterisation test per scenario: what upstream
 does there, measured on its captures. They are skipped when the lab has not been run, and
 required in CI (`FREEWHEEL_REQUIRE_CAPTURES=1`).

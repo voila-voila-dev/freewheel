@@ -9,6 +9,7 @@ const DEFAULT_TIME_BASE_HZ: i64 = 90_000;
 const MILLISECONDS_PER_SECOND: i64 = 1_000;
 const TIME_BASE_PREFIX: &str = "#tb 0:";
 const PTS_FIELD: usize = 2;
+const SIZE_FIELD: usize = 4;
 const HASH_FIELD: usize = 5;
 
 /// One compressed video frame of a `framemd5` listing.
@@ -16,6 +17,8 @@ const HASH_FIELD: usize = 5;
 pub struct FrameDigest {
     /// Presentation timestamp, in time base units.
     pub pts: i64,
+    /// Size of the compressed frame, in bytes (0 when the listing does not say).
+    pub size_bytes: u64,
     /// MD5 of the frame's bytes, in hexadecimal.
     pub hash: String,
 }
@@ -51,6 +54,10 @@ impl FrameDigests {
             let Ok(pts) = pts.parse() else { continue };
             frames.push(FrameDigest {
                 pts,
+                size_bytes: fields
+                    .get(SIZE_FIELD)
+                    .and_then(|size| size.parse().ok())
+                    .unwrap_or(0),
                 hash: (*hash).to_owned(),
             });
         }
@@ -73,6 +80,28 @@ impl FrameDigests {
             .iter()
             .filter(|frame| arrived.get(&frame.pts) == Some(&frame.hash.as_str()))
             .map(|frame| frame.pts)
+            .collect()
+    }
+
+    /// The frames of this listing (what was sent) that [`FrameCheck::damaged`] counts: arrived
+    /// with other bytes, or not at all between the first and the last frame that arrived.
+    #[must_use]
+    pub fn damaged_in(&self, received: &Self) -> Vec<&FrameDigest> {
+        let arrived: HashMap<i64, &str> = received
+            .frames
+            .iter()
+            .map(|frame| (frame.pts, frame.hash.as_str()))
+            .collect();
+        let has_arrived = |frame: &&FrameDigest| arrived.contains_key(&frame.pts);
+        let (Some(first), Some(last)) = (
+            self.frames.iter().position(|frame| has_arrived(&frame)),
+            self.frames.iter().rposition(|frame| has_arrived(&frame)),
+        ) else {
+            return Vec::new();
+        };
+        self.frames[first..=last]
+            .iter()
+            .filter(|frame| arrived.get(&frame.pts) != Some(&frame.hash.as_str()))
             .collect()
     }
 }

@@ -11,12 +11,15 @@ interfaces_for() {
 }
 
 # shape_link <k> <direction> "<netem arguments>", e.g. shape_link 2 up "delay 80ms rate 2mbit"
+# Marked as `netem link <k> <direction>: <arguments>`, so the analysis knows what each link
+# could carry (packet_capture::EmulatedUplinks).
 shape_link() {
 	local k=$1 direction=$2 netem=$3
 	for interface in $(interfaces_for "$k" "$direction"); do
 		# shellcheck disable=SC2086 # netem arguments are words on purpose
 		in_net tc qdisc replace dev "$interface" root netem $netem
 	done
+	quiet_mark "netem link $k $direction: $netem"
 }
 
 # cut_link <k> [direction]: packets vanish silently, like a dead zone.

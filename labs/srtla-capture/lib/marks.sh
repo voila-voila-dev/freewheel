@@ -5,3 +5,8 @@ mark() {
 	echo "$(date +%s%6N) $*" >> "$OUT/$SCENARIO.marks"
 	echo "[$(date +%T)] $*"
 }
+
+# quiet_mark <label>: a mark that is not echoed (one per second of a trace replay).
+quiet_mark() {
+	echo "$(date +%s%6N) $*" >> "$OUT/$SCENARIO.marks"
+}

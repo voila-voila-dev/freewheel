@@ -14,7 +14,7 @@ use std::fmt::Write as _;
 use std::path::Path;
 use std::process::ExitCode;
 
-use packet_capture::{LabRun, median, spread};
+use packet_capture::{LabRun, LossCauses, median, spread};
 
 const USAGE: &str =
     "usage: bench-transport <bench directory> [--json <file>] [--gate <receiver>-<sender>]";
@@ -55,6 +55,20 @@ struct Summary {
     latency_median_ms: f64,
     latency_p99_ms: f64,
     restored_share_percent: f64,
+    /// Why frames were lost (`NaN` fields when the runs have no `netem` marks).
+    causes: CauseSummary,
+}
+
+/// Medians over the runs of the frames each cause explains ([`LossCauses`]).
+#[derive(Debug, Clone, Copy)]
+struct CauseSummary {
+    capacity: f64,
+    recovery: f64,
+    isolated_loss: f64,
+    link_down: f64,
+    queue: f64,
+    late: f64,
+    short_seconds: f64,
 }
 
 /// One run of one scenario.
@@ -66,6 +80,7 @@ struct Sample {
     latency_median_ms: Option<f64>,
     latency_p99_ms: Option<f64>,
     restored_share_percent: Option<f64>,
+    causes: Option<LossCauses>,
 }
 
 /// `(scenario, combination)` → summary.
@@ -97,6 +112,7 @@ fn main() -> ExitCode {
         }
     };
     print!("{}", table(&results));
+    print!("{}", causes_table(&results));
     if let Some(path) = &options.json
         && let Err(error) = std::fs::write(path, to_json(&results))
     {
@@ -195,6 +211,7 @@ fn sample(run: &Path, scenario: &str) -> Sample {
         restored_share_percent: (scenario == RESTORED_LINK_SCENARIO)
             .then(|| lab_run.restored_link_share_percent())
             .flatten(),
+        causes: LossCauses::load(run, scenario).ok().flatten(),
     }
 }
 
@@ -209,6 +226,27 @@ fn summary(samples: &[Sample]) -> Summary {
         latency_median_ms: median_of(|s| s.latency_median_ms),
         latency_p99_ms: median_of(|s| s.latency_p99_ms),
         restored_share_percent: median_of(|s| s.restored_share_percent),
+        causes: cause_summary(samples),
+    }
+}
+
+fn cause_summary(samples: &[Sample]) -> CauseSummary {
+    let median_of = |pick: fn(&LossCauses) -> usize| {
+        median(
+            samples
+                .iter()
+                .filter_map(|s| s.causes.as_ref())
+                .map(|causes| to_f64(pick(causes))),
+        )
+    };
+    CauseSummary {
+        capacity: median_of(|c| c.capacity),
+        recovery: median_of(|c| c.recovery),
+        isolated_loss: median_of(|c| c.isolated_loss),
+        link_down: median_of(|c| c.link_down),
+        queue: median_of(|c| c.queue),
+        late: median_of(|c| c.late),
+        short_seconds: median_of(|c| c.short_seconds),
     }
 }
 
@@ -242,6 +280,41 @@ fn table(results: &Results) -> String {
         );
     }
     text
+}
+
+/// Why frames were lost, per scenario (`packet_capture::LossCauses`): only scenarios that lost
+/// frames, and runs with `netem` marks.
+fn causes_table(results: &Results) -> String {
+    let mut text = String::from(
+        "\nWhy frames were lost (median of the runs): capacity = the links together carried less \
+         than the stream (that second, the one before or after); recovery = 2–5 s after such a second, \
+         nothing lost on the way (catching up); isolated = lost on a lossy link \
+         while capacity sufficed; link down = sent into a cut or dead link; queue = a full queue; \
+         late = every packet arrived, too late.\n\n\
+         | Scenario | Sender → receiver | Short seconds | Capacity | Recovery | Isolated loss | Link down | Queue | Late |\n\
+         |---|---|---|---|---|---|---|---|---|\n",
+    );
+    let mut any = false;
+    for ((scenario, combination), s) in results {
+        let c = s.causes;
+        if c.capacity.is_nan() || s.damaged_frames == 0.0 {
+            continue;
+        }
+        any = true;
+        let _ = writeln!(
+            text,
+            "| {scenario} | {} | {} | {} | {} | {} | {} | {} | {} |",
+            label(combination),
+            show(c.short_seconds, 0),
+            show(c.capacity, 0),
+            show(c.recovery, 0),
+            show(c.isolated_loss, 0),
+            show(c.link_down, 0),
+            show(c.queue, 0),
+            show(c.late, 0),
+        );
+    }
+    if any { text } else { String::new() }
 }
 
 fn show(value: f64, decimals: usize) -> String {

@@ -164,6 +164,28 @@ many more frames overall (1754) but lets an intact one through now and then, whi
 gaps short. The answer is lowering the encoder's bitrate when the links cannot carry it, not
 the scheduler.
 
+## Why frames are lost (2026-11-22)
+
+Before adaptive FEC, each lost frame of the step 3 CI captures (run 44262198730, 3 runs) was
+classified against the emulated network (`packet_capture::LossCauses`, second table of
+`bench-transport`; method in `labs/srtla-capture/README.md`, "Transport bench"). Medians of the
+runs, `transport → transport`:
+
+| Scenario | Lost | Capacity | Recovery | Isolated loss | Link down, queue, late |
+|---|---|---|---|---|---|
+| trace-drive | 517 | 433 (427–433) | 89 (79–90) | 0 | 0 |
+| real-ride | 61 | 61 (53–70) | 0 | 0 | 0 |
+| all-links-drop | 186 | 182 | 4 | 0 | 0 |
+
+Every frame is lost while the links together carry less than the stream (17 short seconds on
+`trace-drive`, 4 on `real-ride`, 5 on `all-links-drop`), or in the 2–5 s after, while the stream
+catches up (on `trace-drive`, every frame of 87–89 s, with 5–8 Mbit/s back for 3.5). The
+random and bursty losses of `real-ride` and `burst-loss` cost nothing: SRT's own retransmissions
+repair them within its 2 s. Upstream loses 1 frame that way on `real-ride`, irlserver 19; on
+`trace-drive` upstream also loses 1012 frames to full modem queues, which our scheduler no longer fills.
+Hence no FEC: it repairs isolated losses, there are none left, and it would spend capacity that is
+missing exactly when frames are lost. Next is step 5, the encoder's bitrate following the links.
+
 ## Alternative to evaluate
 
 Multipath QUIC with datagrams (IETF draft): a standard, but a large dependency and less control over media-aware scheduling.
