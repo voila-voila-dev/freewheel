@@ -270,6 +270,11 @@ kbit/s intact against 2970 (16 frames lost against 49). Its reports showed why:
   window instead (500 ms more) lost 45 frames there in a lab run. Lab, one run: `real-ride` 2944
   kbit/s intact, 3 frames lost; `trace-drive` 2163, 188; `all-links-drop` 2510, 189.
 
+CI run 45194700354 (3 runs, medians): our transport beats the baseline on every scenario.
+`real-ride` 2950 kbit/s intact, 11 frames lost, longest gap 132 ms (baseline 2968, 52, 396 ms);
+`trace-drive` 2118, 172, 924 ms (1051, 1754, 3333 ms); `all-links-drop` 2538, 186, 6.1 s (2434,
+209, 6.9 s); `link-drop` 3056, restored link 50 % (3028, 13 %).
+
 ## Alternative to evaluate
 
 Multipath QUIC with datagrams (IETF draft): a standard, but a large dependency and less control over media-aware scheduling.

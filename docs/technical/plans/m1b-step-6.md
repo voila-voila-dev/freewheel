@@ -14,15 +14,13 @@ column, empty today (`bench_transport.rs`, "not measured yet"), gets a value.
 
 ## State at handoff
 
-- Branch `m1b-step-5` (commit `a437b91`), not merged yet. CI run 45194700354 was still running
-  at handoff: its `transport-bench` job decides whether step 5 is done (`real-ride` must reach
-  2911 kbit/s intact, the baseline's 2970 less 2 %; lab, one run: 2944). In the same run,
+- Branch `m1b-step-5`, not merged yet. Step 5 is done: CI run 45194700354's `transport-bench`
+  beats the baseline on every scenario (`roadmap.md`). In the same run,
   `srtla-lab` (`group_limit`) and `interop-sender` (`srt_server_restart`) failed on
   characterisation tests of the upstream server that passed the run before on the same code
   (except for a bitrate-control change they do not use): probably flaky. Rerun them
   (`gh run rerun 45194700354 --failed`) before concluding anything.
-- If `transport-bench` passed: mark step 5 ✅ in `roadmap.md`, open the PR `m1b-step-5` → `main`,
-  and start step 6 from it (`m1b-step-6`). If it failed: finish step 5 first.
+- Then: the PR `m1b-step-5` → `main` (if not open yet), and step 6 from it (`m1b-step-6`).
 - What step 6 builds on, already there:
   - **Wire format**: the `Background` class (`0x03`) exists (`bonding-protocol/src/freewheel/
     traffic_class.rs`); data payloads are opaque; ACKs carry the session's received sequence
