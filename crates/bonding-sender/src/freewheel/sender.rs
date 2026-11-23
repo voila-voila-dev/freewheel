@@ -395,7 +395,7 @@ impl Sender {
                     }
                 }
                 // The ACK freed room on that link: the upload's chunks are clocked by them.
-                self.fill_spare_capacity(now_us, io, Some(ack.header.link_id));
+                self.fill_spare_capacity(now_us, io);
             }
             Packet::Close { .. } => {
                 if let Some(link) = self.links.iter_mut().find(|l| l.handle == link) {
@@ -475,10 +475,11 @@ impl Sender {
         }
         self.follow_recording(now_us, io);
         self.probe(now_us, io);
-        self.fill_spare_capacity(now_us, io, None);
+        self.fill_spare_capacity(now_us, io);
     }
 
-    /// Sends the recording's chunks on the links' spare room (`only_link`, or every link): on a
+    /// Sends the recording's chunks on the links' spare room, one at a time to the link whose
+    /// spare window is the least full: on a
     /// usable, measured link the live traffic has not found full lately, outside probe runs, the
     /// upload's bytes in flight stay within the link's spare window (`spare_window.rs`: widened
     /// by each ACK while the queue is under the target, narrowed beyond) and within the share of
@@ -486,64 +487,77 @@ impl Sender {
     /// ([`spare_cap_bytes`]). The live traffic does not count them
     /// ([`InFlight::live_view_bytes`](super::InFlight::live_view_bytes)): they yield to it.
     /// Never padding: spare room carries the recording or nothing.
-    fn fill_spare_capacity(&mut self, now_us: u64, io: &mut impl SenderIo, only_link: Option<u8>) {
+    fn fill_spare_capacity(&mut self, now_us: u64, io: &mut impl SenderIo) {
         let Some(upload) = &mut self.recording else {
             return;
         };
         let (session_id, receiver) = (self.session_id, self.receiver);
         let live_idle = self.live_activity.idle(now_us, self.spare_idle_live_bps);
-        for link in &mut self.links {
-            if only_link.is_some_and(|id| id != link.id)
-                || !link.usable()
-                || !link.estimate.has_rtt()
-                || link.probe.busy()
-                || link.proven_full(now_us)
+        let window_settings = |link: &Link| SpareWindowSettings {
+            queue_target_us: spare_queue_target_us(
+                link,
+                now_us,
+                self.spare_queue_target_us,
+                live_idle,
+            ),
+            gain_bytes: self.spare_gain_bytes,
+            min_bytes: MIN_SPARE_WINDOW_BYTES,
+            max_bytes: spare_cap_bytes(link, now_us, self.spare_share_percent),
+        };
+        // One chunk at a time, to the link whose spare window is the least full: on alike links
+        // they carry alike shares, so what the live traffic measures of them stays alike.
+        loop {
+            let best = self
+                .links
+                .iter()
+                .enumerate()
+                .filter(|(_, link)| {
+                    link.usable()
+                        && link.estimate.has_rtt()
+                        && !link.probe.busy()
+                        && !link.proven_full(now_us)
+                })
+                .filter_map(|(index, link)| {
+                    let room_bytes = link.spare_window.bytes(&window_settings(link));
+                    let used_bytes = link.in_flight.spare_bytes();
+                    (used_bytes + PADDING_DATAGRAM_BYTES <= room_bytes)
+                        .then(|| (index, used_bytes * PER_MILLE / room_bytes.max(1)))
+                })
+                .min_by_key(|(_, used_per_mille)| *used_per_mille)
+                .map(|(index, _)| index);
+            let Some(link) = best.and_then(|index| self.links.get_mut(index)) else {
+                return;
+            };
+            let sequence = self.next_sequence;
+            let header = Header {
+                session_id,
+                link_id: link.id,
+            };
+            let sent = match send_chunk(io, link.handle, receiver, header, sequence, now_us, upload)
             {
-                continue;
-            }
-            let room_bytes = link.spare_window.bytes(&SpareWindowSettings {
-                queue_target_us: spare_queue_target_us(
-                    link,
-                    now_us,
-                    self.spare_queue_target_us,
-                    live_idle,
-                ),
-                gain_bytes: self.spare_gain_bytes,
-                min_bytes: MIN_SPARE_WINDOW_BYTES,
-                max_bytes: spare_cap_bytes(link, now_us, self.spare_share_percent),
-            });
-            while link.in_flight.spare_bytes() + PADDING_DATAGRAM_BYTES <= room_bytes {
-                let sequence = self.next_sequence;
-                let header = Header {
-                    session_id,
-                    link_id: link.id,
-                };
-                let sent =
-                    match send_chunk(io, link.handle, receiver, header, sequence, now_us, upload) {
-                        ChunkSent::Sent(sent) => sent,
-                        ChunkSent::NothingToSend => return,
-                        ChunkSent::Failed => {
-                            stall(
-                                link,
-                                now_us,
-                                io,
-                                SenderEvent::SendFailed {
-                                    source: link.source,
-                                },
-                                Some(upload),
-                            );
-                            break;
-                        }
-                    };
-                self.next_sequence = sequence.wrapping_add(1);
-                if link.in_flight.is_empty() {
-                    link.last_ack_us = link.last_ack_us.max(now_us);
+                ChunkSent::Sent(sent) => sent,
+                ChunkSent::NothingToSend => return,
+                ChunkSent::Failed => {
+                    stall(
+                        link,
+                        now_us,
+                        io,
+                        SenderEvent::SendFailed {
+                            source: link.source,
+                        },
+                        Some(upload),
+                    );
+                    continue;
                 }
-                link.last_sent_us = now_us;
-                link.sent_bytes += sent;
-                link.in_flight
-                    .push_spare(sequence, u16::try_from(sent).unwrap_or(u16::MAX));
+            };
+            self.next_sequence = sequence.wrapping_add(1);
+            if link.in_flight.is_empty() {
+                link.last_ack_us = link.last_ack_us.max(now_us);
             }
+            link.last_sent_us = now_us;
+            link.sent_bytes += sent;
+            link.in_flight
+                .push_spare(sequence, u16::try_from(sent).unwrap_or(u16::MAX));
         }
     }
 
@@ -773,6 +787,7 @@ impl Sender {
 pub const QUEUING_ARRIVAL_US: u64 = 250_000;
 const BITS_PER_BYTE: u64 = 8;
 const PERCENT: u64 = 100;
+const PER_MILLE: u64 = 1_000;
 /// The receiver acknowledges every this many data packets (`bonding_receiver::freewheel`'s
 /// `ACK_EVERY_PACKETS`): an RTT sample is the last of them, sent behind the others.
 const ACK_EVERY_PACKETS: u32 = 4;

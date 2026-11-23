@@ -192,3 +192,33 @@ fn on_links_the_live_stream_nearly_fills_the_upload_takes_only_what_is_left() {
         .map_or(0, RecordingUpload::delivered_bytes);
     assert!(delivered > 0, "the spare megabit carried some of it");
 }
+
+#[test]
+fn a_restored_link_still_gets_an_even_share_of_the_live_stream() {
+    let mut network = Network::new(&[
+        LinkSpec::new(20 * MS, 50 * MBPS),
+        LinkSpec::new(20 * MS, 50 * MBPS),
+    ]);
+    network.enable_recording(&recording_settings());
+    let chunk = random_bytes(75_000, 5);
+    let mut run = |network: &mut Network, seconds: u64, link_up: Option<bool>| {
+        if let Some(up) = link_up {
+            network.set_up(1, up);
+        }
+        for _ in 0..seconds * 10 {
+            network.record(&chunk);
+            network.run(100 * MS, 3 * MBPS);
+        }
+    };
+    network.run(500 * MS, 0);
+    run(&mut network, 5, None);
+    run(&mut network, 5, Some(false));
+    run(&mut network, 2, Some(true));
+    network.take_live_counts();
+    run(&mut network, 3, None);
+    let counts = network.take_live_counts();
+    assert!(
+        counts[1] * 100 >= (counts[0] + counts[1]) * 45,
+        "the upload must not tilt the live split towards the link that stayed: {counts:?}"
+    );
+}

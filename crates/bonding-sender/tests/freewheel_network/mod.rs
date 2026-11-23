@@ -58,6 +58,7 @@ struct SimLink {
     up: bool,
     busy_until_us: u64,
     data_packets: u64,
+    live_packets: u64,
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
@@ -225,6 +226,7 @@ impl Network {
                     up: true,
                     busy_until_us: 0,
                     data_packets: 0,
+                    live_packets: 0,
                 })
                 .collect(),
             handles,
@@ -361,6 +363,14 @@ impl Network {
             .collect()
     }
 
+    /// Live data packets each link carried so far (and resets the counts).
+    pub fn take_live_counts(&mut self) -> Vec<u64> {
+        self.links
+            .iter_mut()
+            .map(|link| std::mem::take(&mut link.live_packets))
+            .collect()
+    }
+
     /// SRT packets the caller sent so far.
     pub const fn sent(&self) -> u32 {
         self.sent
@@ -476,6 +486,9 @@ impl Network {
             sim.busy_until_us = start_us + serialisation_us;
             if datagram.get(1) == Some(&0x01) {
                 sim.data_packets += 1;
+                if datagram.get(3) == Some(&0x01) {
+                    sim.live_packets += 1;
+                }
             }
             let at_us = sim.busy_until_us + sim.spec.delay_us;
             self.schedule(at_us, Delivery::ToReceiver { link, datagram });
