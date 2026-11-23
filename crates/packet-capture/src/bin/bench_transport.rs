@@ -7,7 +7,8 @@
 //! The directory holds `<receiver>-<sender>/run-<n>/` lab runs. Every measure is the median over
 //! the runs: they all vary from run to run by themselves. `--gate` compares one combination (a
 //! candidate) with the baseline, upstream SRTLA + SRT, and fails unless it does at least as well
-//! on every scenario and loses fewer frames overall.
+//! on every scenario and loses fewer frames overall, and, on every scenario where it uploaded a
+//! recording (M1b step 6), delivered all of it in every run.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -62,6 +63,18 @@ struct Summary {
     restored_share_percent: f64,
     /// Why frames were lost (`NaN` fields when the runs have no `netem` marks).
     causes: CauseSummary,
+    /// The recording: share delivered identical in the worst run, how many runs recorded and
+    /// how many got it whole, and the median time to whole after the stream ended.
+    recording: RecordingSummary,
+}
+
+/// The recording upload over the runs of one scenario (`NaN` / 0 when none recorded).
+#[derive(Debug, Clone, Copy)]
+struct RecordingSummary {
+    worst_delivered_percent: f64,
+    runs: usize,
+    whole_runs: usize,
+    whole_after_s: f64,
 }
 
 /// Medians over the runs of the frames each cause explains ([`LossCauses`]).
@@ -87,6 +100,10 @@ struct Sample {
     latency_p99_ms: Option<f64>,
     restored_share_percent: Option<f64>,
     causes: Option<LossCauses>,
+    /// Share of the recording delivered identical, in per cent, if the run recorded.
+    recording_delivered_percent: Option<f64>,
+    recording_whole: bool,
+    recording_whole_after_s: Option<f64>,
 }
 
 /// `(scenario, combination)` → summary.
@@ -129,9 +146,17 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     };
     let failures = gate(&results, candidate);
-    println!(
-        "\nRecording delivered after outages: not measured yet (needs the background traffic class)."
-    );
+    let recorded = results
+        .iter()
+        .filter(|((_, combination), s)| combination == candidate && s.recording.runs > 0)
+        .count();
+    if recorded == 0 {
+        println!("\n{candidate} uploaded no recording: its gate is on the live stream only.");
+    } else {
+        println!(
+            "\n{candidate} uploaded a recording on {recorded} scenarios: each must arrive whole in every run."
+        );
+    }
     if failures.is_empty() {
         println!("{candidate} beats the baseline on every scenario.");
         ExitCode::SUCCESS
@@ -219,6 +244,11 @@ fn sample(run: &Path, scenario: &str) -> Sample {
             .then(|| lab_run.restored_link_share_percent())
             .flatten(),
         causes: LossCauses::load(run, scenario).ok().flatten(),
+        recording_delivered_percent: lab_run
+            .recording
+            .and_then(|recording| recording.delivered_percent()),
+        recording_whole: lab_run.recording.is_some_and(|recording| recording.whole()),
+        recording_whole_after_s: lab_run.recording_whole_after_s(),
     }
 }
 
@@ -235,6 +265,19 @@ fn summary(samples: &[Sample]) -> Summary {
         latency_p99_ms: median_of(|s| s.latency_p99_ms),
         restored_share_percent: median_of(|s| s.restored_share_percent),
         causes: cause_summary(samples),
+        recording: RecordingSummary {
+            worst_delivered_percent: samples
+                .iter()
+                .filter_map(|s| s.recording_delivered_percent)
+                .reduce(f64::min)
+                .unwrap_or(f64::NAN),
+            runs: samples
+                .iter()
+                .filter(|s| s.recording_delivered_percent.is_some())
+                .count(),
+            whole_runs: samples.iter().filter(|s| s.recording_whole).count(),
+            whole_after_s: median_of(|s| s.recording_whole_after_s),
+        },
     }
 }
 
@@ -276,7 +319,7 @@ fn table(results: &Results) -> String {
     for ((scenario, combination), s) in results {
         let _ = writeln!(
             text,
-            "| {scenario} | {} | {} | {} | {} ms | {} kbit/s | {} kbit/s | {} / {} ms | {} | – |",
+            "| {scenario} | {} | {} | {} | {} ms | {} kbit/s | {} kbit/s | {} / {} ms | {} | {} |",
             label(combination),
             s.runs,
             show(s.damaged_frames, 0),
@@ -286,9 +329,25 @@ fn table(results: &Results) -> String {
             show(s.latency_median_ms, 0),
             show(s.latency_p99_ms, 0),
             show_percent(s.restored_share_percent),
+            show_recording(&s.recording),
         );
     }
     text
+}
+
+/// "100 % in 12 s" when every run got the whole recording (median time after the stream
+/// ended), else the worst run's share and how many runs were whole; "–" without a recording.
+fn show_recording(recording: &RecordingSummary) -> String {
+    if recording.runs == 0 {
+        return "–".to_owned();
+    }
+    if recording.whole_runs == recording.runs {
+        return format!("100 % in {} s", show(recording.whole_after_s, 0));
+    }
+    format!(
+        "{:.1} % ({}/{} runs whole)",
+        recording.worst_delivered_percent, recording.whole_runs, recording.runs
+    )
 }
 
 /// Why frames were lost, per scenario (`packet_capture::LossCauses`): only scenarios that lost
@@ -402,6 +461,14 @@ fn gate(results: &Results, candidate: &str) -> Vec<String> {
                 ours.restored_share_percent >= bar,
             )
         });
+        // The recording, where the candidate uploaded one: all of it, in every run. The
+        // baseline has none, so the bar is absolute.
+        if ours.recording.runs > 0 && ours.recording.whole_runs < ours.recording.runs {
+            failures.push(format!(
+                "{scenario}, recording delivered: {}",
+                show_recording(&ours.recording)
+            ));
+        }
         for (what, ours, baseline, holds) in checks.into_iter().chain(restored_check) {
             if !holds {
                 failures.push(format!(
@@ -434,6 +501,11 @@ fn to_json(results: &Results) -> String {
             ("latency_median_ms", s.latency_median_ms),
             ("latency_p99_ms", s.latency_p99_ms),
             ("restored_share_percent", s.restored_share_percent),
+            (
+                "recording_worst_delivered_percent",
+                s.recording.worst_delivered_percent,
+            ),
+            ("recording_whole_after_s", s.recording.whole_after_s),
         ];
         let _ = write!(
             text,
