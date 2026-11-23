@@ -57,4 +57,25 @@ pub enum SenderEvent {
         /// It had been connected once (upstream: "failed to re-establish").
         had_connected: bool,
     },
+    /// The recording to upload has stopped growing: its last bytes go.
+    RecordingEnded {
+        /// Its length.
+        bytes: u64,
+    },
+    /// The receiver has the whole recording.
+    RecordingDelivered {
+        /// Its length.
+        bytes: u64,
+        /// Chunks sent, resends included.
+        sent_chunks: u64,
+        /// Chunk copies lost on the way.
+        lost_chunks: u64,
+    },
+    /// The upload gave up, the drain time after the recording ended having passed.
+    RecordingAbandoned {
+        /// Bytes the receiver has.
+        delivered_bytes: u64,
+        /// The recording's length.
+        recording_bytes: u64,
+    },
 }

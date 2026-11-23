@@ -5,6 +5,7 @@ mod arguments;
 mod event_loop;
 mod freewheel_event_loop;
 mod log_line;
+mod recording_file;
 mod serve_error;
 mod source_list;
 mod udp_io;
@@ -16,6 +17,7 @@ pub use freewheel_event_loop::{
     serve_freewheel,
 };
 pub use log_line::log_line;
+pub use recording_file::RecordingFile;
 pub use serve_error::ServeError;
 pub use source_list::{parse_source_list, read_source_list};
 pub use udp_io::{SEND_BUFFER_BYTES, UdpIo};

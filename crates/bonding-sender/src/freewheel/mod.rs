@@ -5,12 +5,15 @@
 //! [`Sender`] decides; it reuses the SRTLA mode's [`SenderIo`] port (sockets, logs).
 //! Nothing allocates per packet.
 
+mod chunk_window;
+mod chunks_in_flight;
 mod in_flight;
 mod limits;
 mod link;
 mod link_estimate;
 mod probe;
 mod recording_settings;
+mod recording_upload;
 mod sender;
 mod setting_error;
 
@@ -31,6 +34,7 @@ pub use recording_settings::{
     DRAIN_S_VARIABLE, END_IDLE_MS_VARIABLE, IN_FLIGHT_CHUNKS_VARIABLE, LOSS_TIMEOUT_MS_VARIABLE,
     RECORDING_VARIABLE, RecordingSettings, SHARE_PERCENT_VARIABLE, WINDOW_BYTES_VARIABLE,
 };
+pub use recording_upload::{ChunkToSend, RecordingUpload};
 pub use sender::{FreewheelLinkStatus, QUEUING_ARRIVAL_US, Sender};
 pub use setting_error::SettingError;
 

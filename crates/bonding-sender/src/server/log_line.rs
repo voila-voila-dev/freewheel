@@ -28,5 +28,21 @@ pub fn log_line(event: &SenderEvent) -> String {
             "could not establish any link, giving up"
         }
         .to_owned(),
+        SenderEvent::RecordingEnded { bytes } => {
+            format!("recording: ended at {bytes} bytes, sending its tail")
+        }
+        SenderEvent::RecordingDelivered {
+            bytes,
+            sent_chunks,
+            lost_chunks,
+        } => format!(
+            "recording: all {bytes} bytes delivered ({sent_chunks} chunks sent, {lost_chunks} lost)"
+        ),
+        SenderEvent::RecordingAbandoned {
+            delivered_bytes,
+            recording_bytes,
+        } => format!(
+            "recording: gave up with {delivered_bytes} of {recording_bytes} bytes delivered"
+        ),
     }
 }

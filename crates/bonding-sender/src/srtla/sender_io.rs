@@ -38,6 +38,22 @@ pub trait SenderIo {
     /// The datagram did not leave whole.
     fn send_to_srt(&mut self, caller: SocketAddrV4, datagram: &[u8]) -> Result<(), IoFailure>;
 
+    /// How long the recording to upload is now, in bytes (the freewheel transport's background
+    /// class, M1b step 6); `None` while there is none to read. Only called with a recording
+    /// enabled; the default has none.
+    fn recording_bytes(&mut self) -> Option<u64> {
+        None
+    }
+
+    /// Fills `out` with the recording's bytes from `offset`.
+    ///
+    /// # Errors
+    /// Those bytes cannot be read (yet).
+    fn read_recording(&mut self, offset: u64, out: &mut [u8]) -> Result<(), IoFailure> {
+        let _ = (offset, out);
+        Err(IoFailure)
+    }
+
     /// Something worth a log line happened. Never called per packet, except for failed sends.
     fn report(&mut self, event: SenderEvent) {
         let _ = event;

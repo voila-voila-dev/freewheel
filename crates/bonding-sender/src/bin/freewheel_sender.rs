@@ -19,7 +19,7 @@ use std::sync::atomic::AtomicBool;
 use bitrate_control::ControllerSettings;
 use bonding_sender::freewheel::{ProbeTarget, RecordingSettings, Sender};
 use bonding_sender::server::{
-    CapacityOutput, FREEWHEEL_WAKE_INTERVAL, SenderConfig, UdpIo, random_session_id,
+    CapacityOutput, FREEWHEEL_WAKE_INTERVAL, RecordingFile, SenderConfig, UdpIo, random_session_id,
     read_source_list, serve_freewheel,
 };
 
@@ -80,6 +80,10 @@ fn run(arguments: &[String]) -> Result<(), String> {
     }
     let recording = RecordingSettings::from_environment(|name| std::env::var(name).ok())
         .map_err(|error| error.to_string())?;
+    if let Some(settings) = &recording {
+        sender.enable_recording(settings);
+        io = io.with_recording(RecordingFile::new(settings.path.clone()));
+    }
     eprintln!(
         "freewheel-sender: SRT on port {}, receiver at {receiver}{}{}{}",
         config.listen_port,

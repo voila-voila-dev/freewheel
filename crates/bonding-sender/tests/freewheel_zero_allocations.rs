@@ -1,14 +1,20 @@
 //! The freewheel per-packet path allocates nothing, on either side, capacity reports for the
-//! encoder included: the count does not grow with traffic.
+//! encoder included, and with capacity probing and the recording upload on: the count does
+//! not grow with traffic.
 
 use std::net::{Ipv4Addr, SocketAddrV4};
 
 use alloc_counter::{CountingAllocator, count_allocations};
 use bonding_protocol::freewheel::MAX_DATAGRAM_LEN;
+use std::path::PathBuf;
+
 use bonding_receiver::freewheel::{
     GroupHandle, IoFailure as ReceiverIoFailure, Receiver, ReceiverIo,
+    RecordingSettings as ReceiverRecordingSettings,
 };
-use bonding_sender::freewheel::{IoFailure, LinkHandle, Sender, SenderIo};
+use bonding_sender::freewheel::{
+    IoFailure, LinkHandle, ProbeTarget, RecordingSettings, Sender, SenderIo,
+};
 
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
@@ -25,6 +31,10 @@ struct Mailbox {
     links: [u64; QUEUE_LEN],
     count: usize,
     srt_bytes: usize,
+    /// The box's recording: this many bytes so far, each one its offset's low byte.
+    recording_bytes: u64,
+    /// Bytes of the recording the server took.
+    copied_bytes: usize,
 }
 
 impl Mailbox {
@@ -35,6 +45,8 @@ impl Mailbox {
             links: [0; QUEUE_LEN],
             count: 0,
             srt_bytes: 0,
+            recording_bytes: 0,
+            copied_bytes: 0,
         }
     }
 
@@ -66,6 +78,15 @@ impl SenderIo for Mailbox {
         self.srt_bytes += datagram.len();
         Ok(())
     }
+    fn recording_bytes(&mut self) -> Option<u64> {
+        Some(self.recording_bytes)
+    }
+    fn read_recording(&mut self, offset: u64, out: &mut [u8]) -> Result<(), IoFailure> {
+        for (at, byte) in (offset..).zip(out.iter_mut()) {
+            *byte = at.to_le_bytes()[0];
+        }
+        Ok(())
+    }
 }
 
 impl ReceiverIo for Mailbox {
@@ -87,6 +108,10 @@ impl ReceiverIo for Mailbox {
     fn close_srt(&mut self, _: GroupHandle) {}
     fn fill_random(&mut self, bytes: &mut [u8]) -> Result<(), ReceiverIoFailure> {
         bytes.fill(1);
+        Ok(())
+    }
+    fn write_recording(&mut self, _: u64, _: u64, bytes: &[u8]) -> Result<(), ReceiverIoFailure> {
+        self.copied_bytes += bytes.len();
         Ok(())
     }
 }
@@ -139,11 +164,22 @@ fn handle_of(sender: &Sender, link: u64) -> Option<LinkHandle> {
         .find(|handle| handle.get() == link)
 }
 
-fn stream(packets: u32) -> usize {
+/// Streams `packets` SRT packets; with `recording`, probing runs and carries a recording that
+/// grows 1 kB per packet. Returns the SRT bytes delivered both ways, and the recording bytes.
+fn stream(packets: u32, recording: bool) -> (usize, usize) {
     let mut to_receiver = Mailbox::new();
     let mut to_sender = Mailbox::new();
     let mut sender = Sender::new(42, RECEIVER);
     let mut receiver = Receiver::new();
+    if recording {
+        sender.enable_probing(ProbeTarget {
+            stream_max_wire_bps: 50_000_000,
+            wanted_capacity_bps: 1_000_000_000,
+        });
+        sender.enable_recording(&RecordingSettings::new(PathBuf::from("/unused")));
+        receiver.enable_recording(&ReceiverRecordingSettings::new(PathBuf::from("/unused")));
+    }
+    let report_every = if recording { 30 } else { 300 };
     let sources: Vec<Ipv4Addr> = (1..=LINKS).map(|k| Ipv4Addr::new(10, k, 0, 2)).collect();
     sender.reload_sources(&sources, &mut to_receiver);
     sender.open_links(&mut to_receiver);
@@ -169,7 +205,10 @@ fn stream(packets: u32) -> usize {
         );
         sender.housekeeping(now_us, &mut to_receiver);
         receiver.housekeeping(now_us, &mut to_sender);
-        if number % 300 == 0 {
+        if recording {
+            to_receiver.recording_bytes += 1_000;
+        }
+        if number % report_every == 0 {
             let mut report = [0u8; bitrate_control::MAX_REPORT_LEN];
             let _ = sender.capacity_report(now_us).encode(&mut report);
         }
@@ -181,14 +220,31 @@ fn stream(packets: u32) -> usize {
             &mut to_sender,
         );
     }
-    to_sender.srt_bytes + to_receiver.srt_bytes
+    (
+        to_sender.srt_bytes + to_receiver.srt_bytes,
+        to_sender.copied_bytes,
+    )
 }
 
 #[test]
 fn freewheel_allocates_nothing_per_packet() {
-    let (small_bytes, small) = count_allocations(|| stream(1_000));
-    let (large_bytes, large) = count_allocations(|| stream(100_000));
+    let ((small_bytes, _), small) = count_allocations(|| stream(1_000, false));
+    let ((large_bytes, _), large) = count_allocations(|| stream(100_000, false));
     assert!(small_bytes > 0 && large_bytes > small_bytes);
+    assert_eq!(
+        small, large,
+        "{small} allocations for 1k packets, {large} for 100k"
+    );
+}
+
+#[test]
+fn the_recording_upload_allocates_nothing_per_chunk() {
+    let ((_, small_copied), small) = count_allocations(|| stream(1_000, true));
+    let ((_, large_copied), large) = count_allocations(|| stream(100_000, true));
+    assert!(
+        small_copied > 0 && large_copied > small_copied,
+        "the recording went: {small_copied}, {large_copied} bytes"
+    );
     assert_eq!(
         small, large,
         "{small} allocations for 1k packets, {large} for 100k"

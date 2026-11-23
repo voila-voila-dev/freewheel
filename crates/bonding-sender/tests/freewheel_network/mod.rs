@@ -8,10 +8,13 @@ use std::collections::BinaryHeap;
 use std::net::{Ipv4Addr, SocketAddrV4};
 
 use bitrate_control::CapacityReport;
+use bonding_receiver::freewheel::RecordingSettings as ReceiverRecordingSettings;
 use bonding_receiver::freewheel::{
     GroupHandle, IoFailure as ReceiverIoFailure, Receiver, ReceiverIo,
 };
-use bonding_sender::freewheel::{IoFailure, LinkHandle, ProbeTarget, Sender, SenderIo};
+use bonding_sender::freewheel::{
+    IoFailure, LinkHandle, ProbeTarget, RecordingSettings, Sender, SenderIo,
+};
 
 /// Where the receiver listens.
 pub const RECEIVER: SocketAddrV4 = SocketAddrV4::new(Ipv4Addr::new(10, 200, 0, 1), 5_000);
@@ -67,6 +70,8 @@ enum Delivery {
 struct SenderSide {
     outbox: Vec<(LinkHandle, Vec<u8>)>,
     to_caller: u64,
+    /// The recording the box uploads, once there is one.
+    recording: Option<Vec<u8>>,
 }
 
 impl SenderIo for SenderSide {
@@ -87,6 +92,21 @@ impl SenderIo for SenderSide {
         self.to_caller += 1;
         Ok(())
     }
+    fn recording_bytes(&mut self) -> Option<u64> {
+        self.recording
+            .as_ref()
+            .map(|recording| recording.len() as u64)
+    }
+    fn read_recording(&mut self, offset: u64, out: &mut [u8]) -> Result<(), IoFailure> {
+        let start = usize::try_from(offset).map_err(|_| IoFailure)?;
+        let bytes = self
+            .recording
+            .as_ref()
+            .and_then(|recording| recording.get(start..start + out.len()))
+            .ok_or(IoFailure)?;
+        out.copy_from_slice(bytes);
+        Ok(())
+    }
 }
 
 #[derive(Default)]
@@ -97,6 +117,8 @@ struct ReceiverSide {
     now_us: u64,
     sent_at_us: Vec<u64>,
     group: Option<GroupHandle>,
+    /// The server's copy of the recording, once there is one.
+    copy: Option<Vec<u8>>,
 }
 
 impl ReceiverIo for ReceiverSide {
@@ -130,6 +152,21 @@ impl ReceiverIo for ReceiverSide {
     fn close_srt(&mut self, _: GroupHandle) {}
     fn fill_random(&mut self, bytes: &mut [u8]) -> Result<(), ReceiverIoFailure> {
         bytes.fill(7);
+        Ok(())
+    }
+    fn write_recording(
+        &mut self,
+        _: u64,
+        offset: u64,
+        bytes: &[u8],
+    ) -> Result<(), ReceiverIoFailure> {
+        let copy = self.copy.as_mut().ok_or(ReceiverIoFailure)?;
+        let start = usize::try_from(offset).map_err(|_| ReceiverIoFailure)?;
+        let end = start + bytes.len();
+        if copy.len() < end {
+            copy.resize(end, 0);
+        }
+        copy[start..end].copy_from_slice(bytes);
         Ok(())
     }
 }
@@ -211,6 +248,33 @@ impl Network {
         self.sender.enable_probing(target);
         self.reports = Some(Vec::new());
         self.next_report_us = self.now_us;
+    }
+
+    /// Turns the recording upload on, both sides; the recording starts empty
+    /// ([`record`](Self::record) makes it grow).
+    pub fn enable_recording(&mut self, settings: &RecordingSettings) {
+        self.sender.enable_recording(settings);
+        self.receiver
+            .enable_recording(&ReceiverRecordingSettings::new(settings.path.clone()));
+        self.sender_side.recording = Some(Vec::new());
+        self.receiver_side.copy = Some(Vec::new());
+    }
+
+    /// The box's recording grows by `bytes`.
+    pub fn record(&mut self, bytes: &[u8]) {
+        if let Some(recording) = &mut self.sender_side.recording {
+            recording.extend_from_slice(bytes);
+        }
+    }
+
+    /// The box's recording.
+    pub fn recording(&self) -> &[u8] {
+        self.sender_side.recording.as_deref().unwrap_or_default()
+    }
+
+    /// The server's copy of the recording.
+    pub fn recording_copy(&self) -> &[u8] {
+        self.receiver_side.copy.as_deref().unwrap_or_default()
     }
 
     /// The latest capacity report once probing is on (all zero before).

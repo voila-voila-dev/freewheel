@@ -8,6 +8,7 @@ use net_sys::set_send_buffer_bytes;
 use crate::srtla::{IoFailure, LinkHandle, SenderEvent, SenderIo};
 
 use super::log_line::log_line;
+use super::recording_file::RecordingFile;
 
 /// Send buffer asked for each link socket, as upstream does (Linux grants at most
 /// `net.core.wmem_max`, doubled).
@@ -24,6 +25,7 @@ pub const SEND_BUFFER_BYTES: usize = 8 * 1024 * 1024;
 pub struct UdpIo {
     listen: UdpSocket,
     links: Vec<LinkSocket>,
+    recording: Option<RecordingFile>,
 }
 
 /// One link's socket, and the receiver it is connected to (if any yet).
@@ -41,7 +43,15 @@ impl UdpIo {
         Self {
             listen,
             links: Vec::new(),
+            recording: None,
         }
+    }
+
+    /// Reads the recording to upload from `recording`.
+    #[must_use]
+    pub fn with_recording(mut self, recording: RecordingFile) -> Self {
+        self.recording = Some(recording);
+        self
     }
 
     /// The socket the SRT caller sends to.
@@ -127,6 +137,17 @@ impl SenderIo for UdpIo {
 
     fn send_to_srt(&mut self, caller: SocketAddrV4, datagram: &[u8]) -> Result<(), IoFailure> {
         sent_whole(&self.listen.send_to(datagram, caller), datagram.len())
+    }
+
+    fn recording_bytes(&mut self) -> Option<u64> {
+        self.recording.as_mut().and_then(RecordingFile::len_bytes)
+    }
+
+    fn read_recording(&mut self, offset: u64, out: &mut [u8]) -> Result<(), IoFailure> {
+        self.recording
+            .as_ref()
+            .ok_or(IoFailure)?
+            .read_at(offset, out)
     }
 
     fn report(&mut self, event: SenderEvent) {

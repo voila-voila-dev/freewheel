@@ -329,6 +329,30 @@ refused is not, and the sender sends it again. Padding and malformed payloads ar
 dropped. Tests: `tests/freewheel_recording.rs` (out of order and repeated chunks rebuild the
 recording, ACK ranges, a full disk, no recording), `tests/freewheel_recording_zero_allocations.rs`.
 
+**Sender.** `RecordingUpload` (`bonding_sender::freewheel`) cuts the recording, a file that may
+still be growing (`SenderIo::recording_bytes`, `read_recording`; `freewheel-sender` reads the
+file with `pread`), into chunks of `CHUNK_BYTES`: chunk `i` is bytes `i × size` to
+`(i + 1) × size`. It always sends the first chunk neither delivered nor in flight, so a lost
+chunk goes before new ones, within `WINDOW_BYTES` of the first chunk not delivered (two bits per
+chunk over the window: delivered, in flight). Each copy sent is remembered with its sequence and
+link in a ring, in sending order, so an ACK's ranges find their copies by binary search. A copy
+is delivered when an ACK's ranges hold its sequence; lost when an ACK of its link acknowledges a
+later sequence without it, when its link stalls, closes or leaves, or after `LOSS_TIMEOUT_MS`.
+A late delivery after a loss counts once. Everything lives in memory for the session: an
+outage of every link only pauses it. While the file grows only whole chunks go; once it has not
+grown for `END_IDLE_MS`, its tail goes too (sent again whole if the file grows after all), and
+the upload gives up `DRAIN_S` later. The logs say when it ended, and when it is delivered (with
+the chunks sent and lost) or abandoned.
+
+First scheduling (this part): capacity probing's runs carry chunks instead of padding, with
+probing's rules and budget unchanged; padding only when no chunk is ready. Tests:
+`tests/recording_upload.rs` (scripted ACKs: losses, another link's ACK, an outage of every link
+with each chunk delivered exactly once, timeouts, late deliveries, the window, the tail,
+wrapping sequences), `tests/freewheel_recording.rs` (the real sender and receiver on the
+simulated network: the copy is the recording byte for byte, through an outage of every link,
+the live stream losing nothing), and `tests/freewheel_zero_allocations.rs` with probing and the
+upload on.
+
 Off, both sides are step 5's to the bit: `tests/freewheel_recording_off.rs` digests every
 datagram either side sends, with its time and link, over a simulated run with probing, an outage
 of every link and SRT answers, and compares it with the digest of step 5's code.

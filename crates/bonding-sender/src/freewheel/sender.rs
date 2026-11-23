@@ -4,8 +4,8 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 
 use bitrate_control::CapacityReport;
 use bonding_protocol::freewheel::{
-    CloseReason, Data, Header, MAX_DATA_PAYLOAD_LEN, MAX_DATAGRAM_LEN, Packet, SessionId,
-    TrafficClass,
+    BackgroundPayload, CloseReason, DATA_HEADER_LEN, Data, Header, MAX_DATA_PAYLOAD_LEN,
+    MAX_DATAGRAM_LEN, MAX_RECORDING_CHUNK_LEN, Packet, RecordingChunk, SessionId, TrafficClass,
 };
 
 use super::limits::{
@@ -15,6 +15,8 @@ use super::limits::{
 use super::link::Link;
 use super::link_estimate::wrapped_us;
 use super::probe::{PROBE_GAIN, ProbeTarget, Probing};
+use super::recording_settings::RecordingSettings;
+use super::recording_upload::RecordingUpload;
 use crate::srtla::{LinkHandle, SenderEvent, SenderIo};
 
 /// What the outside world may know about one link (for the event loop and tests).
@@ -56,6 +58,11 @@ pub struct Sender {
     probing: Option<Probing>,
     /// Padding bytes sent so far.
     padding_bytes: u64,
+    /// The recording upload, once [`enable_recording`](Self::enable_recording) has been called.
+    recording: Option<RecordingUpload>,
+    /// What the logs were told of the upload: it ended, it finished (delivered or abandoned).
+    recording_ended_reported: bool,
+    recording_finished_reported: bool,
 }
 
 /// Live bytes counted since the last capacity report, and when that was.
@@ -88,7 +95,23 @@ impl Sender {
             },
             probing: None,
             padding_bytes: 0,
+            recording: None,
+            recording_ended_reported: false,
+            recording_finished_reported: false,
         }
+    }
+
+    /// Uploads the recording `io` reads ([`SenderIo::recording_bytes`],
+    /// [`SenderIo::read_recording`]) in the background class: its chunks take the place of
+    /// capacity probing's padding (`recording_upload.rs`).
+    pub fn enable_recording(&mut self, settings: &RecordingSettings) {
+        self.recording = Some(RecordingUpload::new(settings));
+    }
+
+    /// The recording upload, if enabled.
+    #[must_use]
+    pub const fn recording(&self) -> Option<&RecordingUpload> {
+        self.recording.as_ref()
     }
 
     /// Probes the links' spare capacity with padding while the encoder is below its maximum
@@ -122,9 +145,13 @@ impl Sender {
             added += 1;
         }
         let (session_id, receiver) = (self.session_id, self.receiver);
+        let recording = &mut self.recording;
         self.links.retain(|link| {
             let kept = sources.contains(&link.source);
             if !kept {
+                if let Some(upload) = recording.as_mut() {
+                    upload.on_link_lost(link.id);
+                }
                 if link.open {
                     let close = Packet::Close {
                         header: Header {
@@ -200,6 +227,7 @@ impl Sender {
                 SenderEvent::SendFailed {
                     source: link.source,
                 },
+                self.recording.as_mut(),
             );
             return;
         }
@@ -282,6 +310,12 @@ impl Sender {
                 }
             }
             Packet::Ack(ack) => {
+                if let Some(upload) = &mut self.recording
+                    && self.links.iter().any(|link| link.id == ack.header.link_id)
+                {
+                    upload.on_acknowledged(ack.ranges.iter());
+                    upload.on_link_acknowledged(ack.header.link_id, ack.timing.largest_sequence);
+                }
                 let Some(link) = self.link_by_id(ack.header.link_id) else {
                     return;
                 };
@@ -302,6 +336,9 @@ impl Sender {
                     link.joined = false;
                     link.last_join_us = None;
                     link.in_flight.clear();
+                    if let Some(upload) = &mut self.recording {
+                        upload.on_link_lost(link.id);
+                    }
                 }
             }
             Packet::Keepalive { .. } | Packet::Join(_) => {}
@@ -357,6 +394,7 @@ impl Sender {
                     SenderEvent::LinkFailed {
                         source: link.source,
                     },
+                    self.recording.as_mut(),
                 );
             }
             if now_us.saturating_sub(link.last_sent_us) >= KEEPALIVE_IDLE_US {
@@ -369,7 +407,45 @@ impl Sender {
                 }
             }
         }
+        self.follow_recording(now_us, io);
         self.probe(now_us, io);
+    }
+
+    /// Reads how long the recording is, finds lost chunks by their timeout, and tells the logs
+    /// when the recording ended and when the upload finished.
+    fn follow_recording(&mut self, now_us: u64, io: &mut impl SenderIo) {
+        let Some(upload) = &mut self.recording else {
+            return;
+        };
+        if let Some(bytes) = io.recording_bytes() {
+            upload.on_recording_bytes(now_us, bytes);
+        }
+        upload.expire(now_us);
+        if upload.ended() && !self.recording_ended_reported {
+            self.recording_ended_reported = true;
+            io.report(SenderEvent::RecordingEnded {
+                bytes: upload.recording_bytes(),
+            });
+        }
+        if !upload.ended() {
+            self.recording_ended_reported = false;
+            self.recording_finished_reported = false;
+        } else if !self.recording_finished_reported {
+            if upload.complete() {
+                self.recording_finished_reported = true;
+                io.report(SenderEvent::RecordingDelivered {
+                    bytes: upload.recording_bytes(),
+                    sent_chunks: upload.sent_chunks(),
+                    lost_chunks: upload.lost_chunks(),
+                });
+            } else if upload.abandoned(now_us) {
+                self.recording_finished_reported = true;
+                io.report(SenderEvent::RecordingAbandoned {
+                    delivered_bytes: upload.delivered_bytes(),
+                    recording_bytes: upload.recording_bytes(),
+                });
+            }
+        }
     }
 
     /// Starts runs of padding on the links due for one, and paces the runs going on
@@ -432,17 +508,19 @@ impl Sender {
                 && link.in_flight.bytes() + PADDING_DATAGRAM_BYTES <= window_bytes
             {
                 let sequence = self.next_sequence;
-                let packet = Packet::Data(Data {
-                    header: Header {
-                        session_id,
-                        link_id: link.id,
-                    },
-                    class: TrafficClass::Background,
+                let header = Header {
+                    session_id,
+                    link_id: link.id,
+                };
+                let Some(sent) = send_background(
+                    io,
+                    link.handle,
+                    receiver,
+                    header,
                     sequence,
-                    sent_at_us: wrapped_us(now_us),
-                    payload: &PADDING,
-                });
-                if !send_packet(io, link.handle, receiver, &packet) {
+                    now_us,
+                    self.recording.as_mut(),
+                ) else {
                     stall(
                         link,
                         now_us,
@@ -450,22 +528,23 @@ impl Sender {
                         SenderEvent::SendFailed {
                             source: link.source,
                         },
+                        self.recording.as_mut(),
                     );
                     break;
-                }
+                };
                 self.next_sequence = sequence.wrapping_add(1);
                 link.probe.on_padding_sent(sequence);
                 if link.in_flight.is_empty() {
                     link.last_ack_us = link.last_ack_us.max(now_us);
                 }
                 link.last_sent_us = now_us;
-                link.sent_bytes += PADDING_DATAGRAM_BYTES;
-                link.in_flight.push(
-                    sequence,
-                    u16::try_from(PADDING_DATAGRAM_BYTES).unwrap_or(u16::MAX),
-                );
-                probing.budget_bytes -= PADDING_DATAGRAM_BYTES;
-                self.padding_bytes += PADDING_DATAGRAM_BYTES;
+                link.sent_bytes += sent.size_bytes;
+                link.in_flight
+                    .push(sequence, u16::try_from(sent.size_bytes).unwrap_or(u16::MAX));
+                probing.budget_bytes = probing.budget_bytes.saturating_sub(sent.size_bytes);
+                if sent.padding {
+                    self.padding_bytes += sent.size_bytes;
+                }
             }
         }
         self.probing = Some(probing);
@@ -572,7 +651,71 @@ fn accept(link: &mut Link, now_us: u64, io: &mut impl SenderIo) {
     link.last_ack_us = now_us;
 }
 
-fn stall(link: &mut Link, now_us: u64, io: &mut impl SenderIo, event: SenderEvent) {
+/// One background datagram that left: its size on the wire, and whether it was padding.
+struct BackgroundSent {
+    size_bytes: u64,
+    padding: bool,
+}
+
+/// Sends one background datagram as `sequence`: the recording's next chunk when there is one
+/// to send and it can be read, else padding. `None` if the send failed.
+fn send_background(
+    io: &mut impl SenderIo,
+    link: LinkHandle,
+    receiver: SocketAddrV4,
+    header: Header,
+    sequence: u32,
+    now_us: u64,
+    mut recording: Option<&mut RecordingUpload>,
+) -> Option<BackgroundSent> {
+    let mut bytes = [0u8; MAX_RECORDING_CHUNK_LEN];
+    let mut payload = [0u8; MAX_DATA_PAYLOAD_LEN];
+    let chunk = recording
+        .as_deref_mut()
+        .and_then(|upload| upload.next_chunk(now_us))
+        .and_then(|chunk| {
+            let bytes = bytes.get_mut(..chunk.len)?;
+            io.read_recording(chunk.offset, bytes).ok()?;
+            let len = BackgroundPayload::Chunk(RecordingChunk {
+                offset: chunk.offset,
+                bytes,
+            })
+            .encode(&mut payload)
+            .ok()?;
+            Some((chunk, len))
+        });
+    let body = chunk.map_or(&PADDING[..], |(_, len)| {
+        payload.get(..len).unwrap_or_default()
+    });
+    let packet = Packet::Data(Data {
+        header,
+        class: TrafficClass::Background,
+        sequence,
+        sent_at_us: wrapped_us(now_us),
+        payload: body,
+    });
+    if !send_packet(io, link, receiver, &packet) {
+        return None;
+    }
+    if let (Some(upload), Some((chunk, _))) = (recording, chunk) {
+        upload.on_sent(chunk, sequence, header.link_id, now_us);
+    }
+    Some(BackgroundSent {
+        size_bytes: (DATA_HEADER_LEN + body.len()) as u64,
+        padding: chunk.is_none(),
+    })
+}
+
+fn stall(
+    link: &mut Link,
+    now_us: u64,
+    io: &mut impl SenderIo,
+    event: SenderEvent,
+    recording: Option<&mut RecordingUpload>,
+) {
+    if let Some(upload) = recording {
+        upload.on_link_lost(link.id);
+    }
     link.probe.on_stall(link.capacity_bps(now_us));
     link.stalled = true;
     link.in_flight.clear();
