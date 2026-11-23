@@ -126,6 +126,17 @@ Off by default: a bare run is as before. A scenario may set `RECORDING=0` itself
 | `RECORDING_DRAIN_S` | how long the links stay up after the stream, in seconds | empty: as long as the stream ran |
 | `FREEWHEEL_RECORDING_*` | the sender's and the receiver's own settings (`RecordingSettings` of `bonding-sender` and `bonding-receiver`), passed through | theirs |
 
+How (`lib/recording.sh`): once SRT is connected, stream 1's recording is written from
+`/dev/urandom` through `pv` at the rate into `/tmp/freewheel-recording.1.bin`, as long as the
+stream; `freewheel-sender` gets `FREEWHEEL_RECORDING` pointing there, `freewheel-receiver`
+`FREEWHEEL_RECORDING_DIR=/tmp/freewheel-recordings`. Once written, a watcher `cmp`s the copy
+every 0.5 s. After the scenario's `run`, the lab waits for it (the links stay as they are), then
+`recording-check` (`crates/packet-capture`, built and mounted by `run-all.sh`) writes
+`<scenario>.recording` (`recording_bytes=… copy_bytes=… identical_bytes=…`) and both files are
+deleted. Marks: `recording 1 started …`, `recording 1 written <bytes> bytes` (the stream's end),
+then `recording 1 delivered` or `recording 1 drain over`, and `recording 1 compared: …`.
+`LabRun` reads them: `recording` and `recording_whole_after_s`.
+
 ### Frame times and latency
 
 `frame-times` (`crates/packet-capture`, built for Linux by `run-all.sh` and mounted with ours)

@@ -39,7 +39,7 @@ docker run --rm -v "$root:/src" -w /src -v freewheel-cargo-registry:/usr/local/c
 	-e CARGO_TARGET_DIR=/src/.cache/lab-target rust:1.94.0-slim-trixie \
 	sh -c "apt-get update -qq && apt-get install --yes -qq --no-install-recommends libx264-dev > /dev/null \
 		&& cargo build --quiet --release --locked -p bonding-receiver -p bonding-sender -p h264-encoder \
-		&& cargo build --quiet --release --locked -p packet-capture --bin frame-times"
+		&& cargo build --quiet --release --locked -p packet-capture --bin frame-times --bin recording-check"
 mounts=(-v "$root/.cache/lab-target/release:/opt/freewheel:ro")
 
 docker build -q --target "$target" -t "freewheel-srtla-$target" "$lab" > /dev/null
@@ -63,11 +63,12 @@ done
 mkdir -p "$root/.cache/traces"
 mounts+=(-v "$root/.cache/traces:/opt/traces:ro")
 
-# The recording's settings, and every FREEWHEEL_RECORDING_* the caller set, go to the lab.
+# The recording's settings, and the sender's and receiver's FREEWHEEL_RECORDING_* the caller set,
+# go to the lab (not the recording's path and the copies' directory: the lab sets those).
 recording_variables=(-e RECORDING="${RECORDING:-0}" -e RECORDING_BPS="${RECORDING_BPS:-}" -e RECORDING_DRAIN_S="${RECORDING_DRAIN_S:-}")
 while read -r variable; do
 	recording_variables+=(-e "$variable")
-done < <(env | sed -n 's/^\(FREEWHEEL_RECORDING[A-Z_]*\)=.*/\1/p')
+done < <(env | sed -n 's/^\(FREEWHEEL_RECORDING_[A-Z_]*\)=.*/\1/p' | grep -vx FREEWHEEL_RECORDING_DIR)
 
 run_one() {
 	local scenario=$1

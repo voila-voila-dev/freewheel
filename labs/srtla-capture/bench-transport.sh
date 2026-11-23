@@ -12,6 +12,8 @@
 #
 # Scenarios: a dead link, bursty loss, varying capacity, a total outage, a ride with everything
 # at once, and two replays of recorded LTE traces (in town and on the road).
+# Our own transport uploads a recording too (RECORDING=1 unless RECORDING=0 is set: README,
+# "Recording upload"); the others have none.
 # Runs are interleaved (run 1 of every combination, then run 2…) so that a busier moment of the
 # host does not land on one combination only.
 set -euo pipefail
@@ -31,7 +33,9 @@ for run in $(seq 1 "$runs"); do
 		receiver=${pair%/*}
 		sender=${pair#*/}
 		echo "run $run: $sender → $receiver"
-		RECEIVER=$receiver SENDER=$sender DISCARD_VIDEO=1 CAPTURE_SNAPLEN=96 \
+		recording=0
+		if [ "$pair" = transport/transport ]; then recording=${RECORDING:-1}; fi
+		RECEIVER=$receiver SENDER=$sender DISCARD_VIDEO=1 CAPTURE_SNAPLEN=96 RECORDING=$recording \
 			CAPTURES_DIR="$root/.cache/transport-bench/$receiver-$sender/run-$run" \
 			"$lab/run-all.sh" "$parallel" "${scenarios[@]}"
 	done

@@ -4,6 +4,7 @@
 #   <name>.marks                          what the scenario did, and when
 #   <name>.ts, <name>.srt-stats.json      video received, SRT listener statistics
 #   <name>.{sent.<s>,received}.times      when each video frame was sent and delivered
+#   <name>.recording                      how much of the recording arrived (RECORDING=1)
 #   <name>.*.log                          every process
 #
 #   run-scenario <name>     one scenario
@@ -14,7 +15,7 @@ readonly LAB=/opt/lab
 export OUT=/out
 
 # shellcheck source=/dev/null
-for library in marks topology impairments processes capture inject traces; do source "$LAB/lib/$library.sh"; done
+for library in marks topology impairments processes recording capture inject traces; do source "$LAB/lib/$library.sh"; done
 
 if [ "${1:-}" = --list ]; then
 	for file in "$LAB"/scenarios/*.sh; do
@@ -41,6 +42,7 @@ create_links "$LINKS"
 start_captures
 mark "scenario $SCENARIO"
 run
+finish_recording
 stop_all
 stop_captures
 write_frame_digests

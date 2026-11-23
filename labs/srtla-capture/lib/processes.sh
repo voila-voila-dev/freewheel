@@ -101,7 +101,10 @@ stop_srt_listener() {
 }
 
 start_receiver() {
-	in_server "$RECEIVER_PROGRAM" "$SRTLA_PORT" 127.0.0.1 "$SRT_LISTENER_PORT" 2>> "$OUT/$SCENARIO.receiver.log" &
+	local copies=""
+	if recording_on; then copies=$RECORDING_COPY_DIR; fi
+	FREEWHEEL_RECORDING_DIR="$copies" \
+		in_server "$RECEIVER_PROGRAM" "$SRTLA_PORT" 127.0.0.1 "$SRT_LISTENER_PORT" 2>> "$OUT/$SCENARIO.receiver.log" &
 	sleep 0.3
 	mark "receiver started"
 }
@@ -126,7 +129,8 @@ start_sender() {
 	local sender=$1
 	shift
 	write_sender_ips "$sender" "$@"
-	local max_video_bps="" audio_bps=""
+	local max_video_bps="" audio_bps="" recording=""
+	if recording_on; then recording=$(recording_path "$sender"); fi
 	if [ "$ENCODER" = adaptive ]; then
 		max_video_bps=$(bitrate_bps "$BITRATE")
 		audio_bps=$AUDIO_BPS
@@ -135,6 +139,7 @@ start_sender() {
 		status=0
 		FREEWHEEL_CAPACITY_SOCKET="$CAPACITY_SOCKET_PREFIX.$sender.sock" \
 			FREEWHEEL_MAX_VIDEO_BPS="$max_video_bps" FREEWHEEL_AUDIO_BPS="$audio_bps" \
+			FREEWHEEL_RECORDING="$recording" \
 			in_box "$SENDER_PROGRAM" "$((6000 + sender))" "$RECEIVER_IP" "$SRTLA_PORT" "/tmp/srtla_ips.$sender" \
 			>> "$OUT/$SCENARIO.sender.$sender.log" 2>&1 || status=$?
 		mark "sender $sender exited with $status"
@@ -206,6 +211,7 @@ start_stream() {
 	fi
 	mark "stream $sender started at $BITRATE for ${seconds}s"
 	mark "stream $sender encoder $ENCODER"
+	if recording_on; then start_recording "$sender" "$seconds"; fi
 }
 
 # bitrate_bps <rate>: 3M, 800k or 2500000 → bit/s.

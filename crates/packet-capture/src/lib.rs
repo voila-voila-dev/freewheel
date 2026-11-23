@@ -9,6 +9,7 @@
 //!   reached the server, and the latency in between.
 //! - [`LossCauses`]: why each lost frame was lost (capacity, isolated losses, a dead link, a
 //!   queue), against the emulated network ([`EmulatedUplinks`]).
+//! - [`RecordingComparison`]: the server's copy of the recording against the recording.
 //! - [`LabRun`]: everything one lab scenario produced (two captures, marks, SRT statistics).
 //!
 //! Lab and scenarios: `labs/srtla-capture/`. Findings: `docs/technical/protocol/srtla.md`.
@@ -28,6 +29,7 @@ mod loss_causes;
 mod mark;
 mod pcap_file;
 mod process_resources;
+mod recording_comparison;
 mod srt_statistics;
 mod srtla_event;
 mod srtla_report;
@@ -49,6 +51,7 @@ pub use loss_causes::{LossCause, LossCauses, LossEvidence, SentPacket, WIRE_BYTE
 pub use mark::Mark;
 pub use pcap_file::PcapFile;
 pub use process_resources::ProcessResources;
+pub use recording_comparison::RecordingComparison;
 pub use srt_statistics::SrtStatistics;
 pub use srtla_event::SrtlaEvent;
 pub use srtla_report::SrtlaReport;

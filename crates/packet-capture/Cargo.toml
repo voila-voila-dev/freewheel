@@ -27,3 +27,7 @@ path = "src/bin/frame_times.rs"
 [[bin]]
 name = "bench-transport"
 path = "src/bin/bench_transport.rs"
+
+[[bin]]
+name = "recording-check"
+path = "src/bin/recording_check.rs"

@@ -5,7 +5,7 @@ use std::path::Path;
 
 use crate::{
     FrameCheck, FrameDigests, FrameLatency, FrameTime, LabRunError, Mark, PcapFile,
-    ProcessResources, SrtStatistics, SrtlaReport, UdpDatagram,
+    ProcessResources, RecordingComparison, SrtStatistics, SrtlaReport, UdpDatagram,
 };
 
 /// Port the receiver (upstream `srtla_rec` or ours) listens on in the lab.
@@ -18,12 +18,17 @@ const BITS_PER_BYTE: u64 = 8;
 const STREAM_PREFIX: &str = "stream 1 started at ";
 const BITS_PER_KILOBIT: f64 = 1_000.0;
 const MILLISECONDS_PER_SECOND: i64 = 1_000;
+const MILLISECONDS_PER_SECOND_F64: f64 = 1_000.0;
 /// The link `link-drop` cuts and restores.
 const RESTORED_LINK: Ipv4Addr = Ipv4Addr::new(10, 2, 0, 2);
 const RESTORED_MARK: &str = "restore link 2";
 /// The restored link's share is measured this long after it came back, in seconds.
 const RESTORED_SHARE_FROM_S: usize = 15;
 const RESTORED_SHARE_TO_S: usize = 25;
+/// Marks of stream 1's recording (`labs/srtla-capture/lib/recording.sh`): written (the stream's
+/// end), then whole on the server.
+const RECORDING_WRITTEN_MARK: &str = "recording 1 written ";
+const RECORDING_DELIVERED_MARK: &str = "recording 1 delivered";
 
 /// Everything one lab scenario produced.
 #[derive(Debug, Clone)]
@@ -47,6 +52,9 @@ pub struct LabRun {
     /// Bytes the SRT listener wrote to `<scenario>.ts`: `<scenario>.received-bytes` when the
     /// video was discarded, else the file's size (0 when there is neither).
     pub received_bytes: u64,
+    /// The server's copy of stream 1's recording against the recording
+    /// (`<scenario>.recording`; `None` when the run recorded nothing).
+    pub recording: Option<RecordingComparison>,
 }
 
 impl LabRun {
@@ -100,6 +108,9 @@ impl LabRun {
                 .unwrap_or_else(|| {
                     std::fs::metadata(file("ts")).map_or(0, |metadata| metadata.len())
                 }),
+            recording: read_text(&file("recording"))
+                .ok()
+                .and_then(|text| RecordingComparison::parse(&text)),
         })
     }
 
@@ -196,6 +207,17 @@ impl LabRun {
         let seconds = self.stream_seconds().filter(|seconds| *seconds > 0)?;
         let frames = self.frames.filter(|frames| frames.intact_bytes > 0)?;
         Some(to_f64(frames.intact_bytes * BITS_PER_BYTE) / to_f64(seconds) / BITS_PER_KILOBIT)
+    }
+
+    /// How long the recording took to be whole on the server after it was written (the
+    /// stream's end), in seconds; `None` if it never was, or the run recorded nothing.
+    #[must_use]
+    pub fn recording_whole_after_s(&self) -> Option<f64> {
+        let written_ms = self.mark_ms(RECORDING_WRITTEN_MARK)?;
+        let delivered_ms = self.mark_ms(RECORDING_DELIVERED_MARK)?;
+        let whole = self.recording.is_some_and(|recording| recording.whole());
+        let after_ms = u64::try_from(delivered_ms - written_ms).unwrap_or(0);
+        whole.then(|| to_f64(after_ms) / MILLISECONDS_PER_SECOND_F64)
     }
 
     /// Exit codes of the senders that stopped by themselves or were stopped, as `(sender, code)`.
