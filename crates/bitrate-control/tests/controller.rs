@@ -66,16 +66,41 @@ fn falls_to_what_the_links_carry_within_one_window() {
 }
 
 #[test]
-fn keeps_falling_by_a_fifth_per_window_while_pressure_lasts() {
+fn falls_by_at_least_a_fifth_then_holds_once_the_stream_fits() {
     let mut controller = started();
+    // 4 Mbit/s fits 2.68 Mbit/s of video; the first decrease takes a fifth.
     assert_eq!(
-        feed(&mut controller, 4_000, 4_600, strained(20_000_000)),
+        feed(&mut controller, 4_000, 4_600, strained(4_000_000)),
         2_400_000
     );
+    // The stream fits: the pressure that lasts is not the encoder's.
     assert_eq!(
-        feed(&mut controller, 4_600, 5_200, strained(20_000_000)),
-        1_920_000
+        feed(&mut controller, 4_600, 8_000, strained(4_000_000)),
+        2_400_000
     );
+    // Less capacity: down again.
+    assert!(feed(&mut controller, 8_000, 8_600, strained(2_000_000)) < 1_300_000);
+}
+
+#[test]
+fn a_cut_of_some_links_holds_what_the_others_carry_and_climbs_back_when_they_return() {
+    let mut controller = started();
+    // Two of three links cut: the third carries 2 Mbit/s, and SRT's catch-up keeps it full.
+    let cut = CapacityReport {
+        usable_links: 1,
+        overflow_bps: 3_000_000,
+        ..strained(2_000_000)
+    };
+    let held = feed(&mut controller, 4_000, 4_600, cut);
+    assert!((1_250_000..=1_300_000).contains(&held), "{held}");
+    assert_eq!(feed(&mut controller, 4_600, 8_000, cut), held);
+    // The first report with the links back is enough.
+    let back = CapacityReport {
+        usable_links: 3,
+        ..calm(8_000_000)
+    };
+    assert_eq!(controller.on_report(8_000, &back), MAX_BPS);
+    assert_eq!(feed(&mut controller, 8_100, 12_000, back), MAX_BPS);
 }
 
 #[test]
@@ -98,13 +123,17 @@ fn a_keyframe_overflowing_for_a_moment_is_not_pressure_but_queuing_is() {
 }
 
 #[test]
-fn no_usable_link_goes_to_the_minimum_even_at_start() {
-    let mut controller = Controller::new(ControllerSettings::lab(MAX_BPS, 128_000));
-    let report = CapacityReport {
+fn an_outage_of_every_link_holds_the_bitrate() {
+    let mut controller = started();
+    let outage = CapacityReport {
         usable_links: 0,
         ..calm(0)
     };
-    assert_eq!(feed(&mut controller, 0, 600, report), 300_000);
+    assert_eq!(feed(&mut controller, 4_000, 10_000, outage), MAX_BPS);
+    assert_eq!(
+        feed(&mut controller, 10_000, 12_000, calm(10_000_000)),
+        MAX_BPS
+    );
 }
 
 #[test]
@@ -123,18 +152,17 @@ fn climbs_straight_to_what_the_capacity_fits_once_calm() {
 }
 
 #[test]
-fn after_an_outage_climbs_back_within_a_second_of_the_links_returning() {
+fn after_an_outage_climbs_back_as_soon_as_the_links_return() {
     let mut controller = started();
+    let low = feed(&mut controller, 4_000, 4_600, strained(500_000));
+    assert!(low < 400_000, "{low}");
     let outage = CapacityReport {
         usable_links: 0,
         ..calm(0)
     };
-    assert_eq!(feed(&mut controller, 4_000, 10_000, outage), 300_000);
-    // The links come back at the capacity they had; 0.5 s of calm, then straight to it.
-    assert_eq!(
-        feed(&mut controller, 10_000, 11_200, calm(10_000_000)),
-        MAX_BPS
-    );
+    assert_eq!(feed(&mut controller, 4_600, 10_000, outage), low);
+    // The links come back at the capacity they had: straight to it, at the first report.
+    assert_eq!(controller.on_report(10_000, &calm(10_000_000)), MAX_BPS);
 }
 
 #[test]

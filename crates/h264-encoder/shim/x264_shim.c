@@ -15,8 +15,16 @@ struct fw_x264 {
 	int height;
 };
 
-/* Same settings as the lab's ffmpeg: ultrafast, zero latency, constant bitrate with a one
- * second buffer, a keyframe every `keyint` frames, headers before every keyframe. */
+/* Quality asked of x264, high enough that the bitrate cap always binds (the lab's 720p test
+ * pattern needs more than 3 Mbit/s at this quality). */
+#define QUALITY_CRF 12
+
+/* As the lab's ffmpeg (ultrafast, zero latency, a one second buffer at the bitrate, a keyframe
+ * every `keyint` frames, headers before every keyframe) but with the bitrate held by the
+ * buffer alone (capped CRF) rather than by x264's average bitrate (ABR): the same bitrate at a
+ * constant setting, and a new one followed within a frame or two. ABR remembers the stream's
+ * past: from 0.3 back to 3 Mbit/s, it took ~10 s. A hardware encoder in constant bitrate (the
+ * box's Rockchip MPP) follows within a frame or two too. */
 struct fw_x264 *fw_x264_open(int width, int height, int fps, int bitrate_kbps, int keyint) {
 	x264_param_t param;
 	if (x264_param_default_preset(&param, "ultrafast", "zerolatency") < 0) return NULL;
@@ -32,7 +40,8 @@ struct fw_x264 *fw_x264_open(int width, int height, int fps, int bitrate_kbps, i
 	param.b_repeat_headers = 1;
 	param.b_annexb = 1;
 	param.i_log_level = X264_LOG_ERROR;
-	param.rc.i_rc_method = X264_RC_ABR;
+	param.rc.i_rc_method = X264_RC_CRF;
+	param.rc.f_rf_constant = QUALITY_CRF;
 	param.rc.i_bitrate = bitrate_kbps;
 	param.rc.i_vbv_max_bitrate = bitrate_kbps;
 	param.rc.i_vbv_buffer_size = bitrate_kbps;

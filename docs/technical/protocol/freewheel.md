@@ -191,8 +191,10 @@ missing exactly when frames are lost. Next is step 5, the encoder's bitrate foll
 `freewheel-sender` reports what the links carry every 100 ms (`bitrate_control::CapacityReport`,
 JSON on a Unix socket); the lab's encoder (`lab-encoder`) follows `bitrate_control::Controller`:
 under pressure (1 % dropped at the box, or 20 % queuing), down to 80 % of the capacity and by
-at least a fifth; once calm (2 s, or 0.5 s after an outage of every link), straight to what the
-measured capacity carries with that headroom, then +5 % every 500 ms beyond it.
+at least a fifth, unless the stream already fits there; once calm (2 s), straight to what the
+measured capacity carries with that headroom, then +5 % every 500 ms beyond it. When links come
+back, straight to what they carry at the first report. An outage of every link holds the
+bitrate.
 
 A link only measures what it is given: once the encoder is low, the links report that bitrate,
 and the controller has nothing to climb back to (step 5's first CI run: 18 s from 0.3 to 2 Mbit/s
@@ -233,6 +235,25 @@ last two:
 - `real-ride`: when two of three links are cut (92.7 s), the encoder steps down to 0.33 Mbit/s
   although the third link carries 2 Mbit/s, then climbs back by 99.4 s. Where the pressure comes
   from (SRT's catch-up on the surviving link?) is not yet measured.
+
+What the reports and the encoded frames then showed, and what changed:
+
+- **The lab's encoder was slow to climb.** x264's average bitrate mode (ABR) remembers the
+  stream's past: set back to 3 Mbit/s after 6 s at 0.3, it made 2.2 Mbit/s a second later and
+  3 Mbit/s only 10 s later. `lab-encoder` now holds its bitrate by the VBV buffer alone (capped
+  CRF, `shim/x264_shim.c`): at a constant setting the same bitrate as the baseline's ffmpeg
+  (3.12 against 3.06 Mbit/s over 20 s, the start's full buffer), and a new one followed within a
+  frame or two, as the box's hardware encoder in constant bitrate does. Test
+  `follows_a_higher_bitrate_within_a_second`.
+- **The pressure after a cut is not the encoder's.** With two links cut, every byte sent on the
+  third was late (overflow = sent) and the box dropped 1–17 Mbit/s: SRT retransmitting what the
+  cut links lost. Lowering the picture does not relieve it, so the controller no longer lowers a
+  stream that fits what the links are measured to carry, and climbs at once when links come back
+  (both outages and partial cuts), without waiting for calm.
+- **An outage of every link holds the bitrate** (decided on the bench, `decisions.md`): nothing
+  measures the links while they are all down, and they come back at the rate they had. Lab, one
+  run of `all-links-drop`: 132 frames lost and a 4.1 s gap at the held bitrate, against 195 and
+  6.4 s at the minimum (baseline 209, 6.9 s); 2683 kbit/s intact against 2475 (baseline 2434).
 
 ## Alternative to evaluate
 

@@ -53,6 +53,20 @@ fn encodes_annex_b_and_follows_a_lower_bitrate() {
 }
 
 #[test]
+fn follows_a_higher_bitrate_within_a_second() {
+    let Ok(mut encoder) = Encoder::open(SETTINGS) else {
+        return;
+    };
+    let _high = encoded_bytes(&mut encoder, 0, FRAMES);
+    assert_eq!(encoder.set_bitrate_bps(200_000), Ok(()));
+    let _low = encoded_bytes(&mut encoder, FRAMES, 6 * 30);
+    assert_eq!(encoder.set_bitrate_bps(2_000_000), Ok(()));
+    // The second after the raise: at least 90 % of 2 Mbit/s (x264's ABR made 0.3 Mbit/s).
+    let back_bits = encoded_bytes(&mut encoder, 7 * 30, 30) * 8;
+    assert!(back_bits >= 1_800_000, "{back_bits} bits");
+}
+
+#[test]
 fn refuses_odd_sizes_and_wrong_frames() {
     let odd = EncoderSettings {
         width: 321,

@@ -105,6 +105,8 @@ instead of ffmpeg's own libx264: ffmpeg makes the raw test pattern, `lab-encoder
 the bitrate `bitrate_control::Controller` picks from the capacity reports `freewheel-sender`
 sends it (`/tmp/freewheel-capacity.1.sock`), and ffmpeg puts it in MPEG-TS. `ENCODER=fixed` keeps
 ffmpeg's fixed bitrate with our transport (step 3), `ENCODER=adaptive` forces the other.
+It encodes as ffmpeg does but holds the bitrate by the VBV buffer alone (capped CRF): x264's
+average bitrate mode took ~10 s to follow a raise (`decisions.md`).
 Every bitrate it takes is a mark, `encoder bitrate <bit/s>`; `LAB_ENCODER_LOG_REPORTS=1` marks
 every report too. The audio comes from its own ffmpeg, live, through a FIFO (`decisions.md`).
 
