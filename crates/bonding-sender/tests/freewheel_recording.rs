@@ -222,3 +222,41 @@ fn a_restored_link_still_gets_an_even_share_of_the_live_stream() {
         "the upload must not tilt the live split towards the link that stayed: {counts:?}"
     );
 }
+
+/// The drain of `trace-drive` (CI 45253171813): three links of 1.4, 1.2 and 1.4 Mbit/s with
+/// 100-packet queues, a trickle of live traffic (the encoder far below its maximum, so probing
+/// wants more), and a backlog to upload. Probe runs used to stop the upload for a third of every
+/// second (the run and its settling): it carried 3.0 of the 3.96 Mbit/s.
+#[test]
+fn a_backlog_fills_the_links_without_probe_runs_in_its_way() {
+    const RATES_BPS: [u64; 3] = [1_416_000, 1_152_000, 1_392_000];
+    const QUEUE_PACKETS: u64 = 100;
+    const PACKET_BITS: u64 = 1_500 * 8;
+    let mut network = Network::new(&RATES_BPS.map(|rate_bps| LinkSpec::new(40 * MS, rate_bps)));
+    for (link, rate_bps) in RATES_BPS.iter().enumerate() {
+        network.set_max_queue_us(link, QUEUE_PACKETS * PACKET_BITS * S / rate_bps);
+    }
+    network.enable_probing(ProbeTarget {
+        stream_max_wire_bps: lab_target().stream_max_wire_bps,
+        wanted_capacity_bps: 8 * MBPS,
+    });
+    network.enable_recording(&recording_settings());
+    network.run(500 * MS, 0);
+    network.record(&random_bytes(10_000_000, 7));
+    network.run(5 * S, 50_000);
+    let before = network
+        .sender
+        .recording()
+        .map_or(0, RecordingUpload::delivered_bytes);
+    network.run(10 * S, 50_000);
+    let after = network
+        .sender
+        .recording()
+        .map_or(0, RecordingUpload::delivered_bytes);
+    let upload_bps = (after - before) * 8 / 10;
+    let capacity_bps: u64 = RATES_BPS.iter().sum();
+    assert!(
+        upload_bps * 100 >= capacity_bps * 90,
+        "the upload carried {upload_bps} bit/s of {capacity_bps}"
+    );
+}

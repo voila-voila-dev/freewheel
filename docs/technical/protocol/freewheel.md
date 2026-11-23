@@ -308,7 +308,9 @@ the binaries only:
 
 - `bonding_sender::freewheel::RecordingSettings`: `FREEWHEEL_RECORDING` (the recording's path;
   unset, no upload), then `FREEWHEEL_RECORDING_` + `CHUNK_BYTES` (1471, a full datagram),
-  `SHARE_PERCENT` (of the room the live traffic leaves; 50), `LOSS_TIMEOUT_MS` (1500),
+  `SHARE_PERCENT` (of the room the live traffic leaves; 100), `QUEUE_TARGET_MS` (10),
+  `BASE_RTT_WINDOW_S` (10), `WINDOW_GAIN_CHUNKS` (4), `IDLE_LIVE_BPS` (100000),
+  `LOSS_TIMEOUT_MS` (1500),
   `END_IDLE_MS` (the recording has ended when it has not grown for that long; 2000), `DRAIN_S`
   (how long the upload keeps trying after that; 3600), `WINDOW_BYTES` (256 MiB beyond the first
   byte not delivered), `IN_FLIGHT_CHUNKS` (8192).
@@ -344,13 +346,27 @@ grown for `END_IDLE_MS`, its tail goes too (sent again whole if the file grows a
 the upload gives up `DRAIN_S` later. The logs say when it ended, and when it is delivered (with
 the chunks sent and lost) or abandoned.
 
-First scheduling (this part): capacity probing's runs carry chunks instead of padding, with
-probing's rules and budget unchanged; padding only when no chunk is ready. Tests:
+**Scheduling.** Live first, always. Each link has a spare window, LEDBAT-like: slow start,
+then up to `WINDOW_GAIN_CHUNKS` chunks per RTT while the link's queue (smoothed RTT minus its
+lowest over one to two `BASE_RTT_WINDOW_S`) stays under `QUEUE_TARGET_MS`, down past it, halved
+once per RTT past twice it. While the live traffic is idle (under `IDLE_LIVE_BPS` over the last
+second, as during the drain), the target widens by the serialisation of four packets and twice
+the RTT variation, so a slow or jittery link is not read as queuing. The window never exceeds
+`SHARE_PERCENT` of the link's congestion window minus the live bytes in flight, and the live
+traffic's decisions do not count the recording's bytes (they yield to it). Each chunk goes to
+the link whose spare window is the least full, so alike links carry alike shares and what the
+live traffic measures of them stays alike. Probe runs carry chunks instead of padding (padding
+only when no chunk is ready), and none starts while the upload has a backlog: the upload fills
+every link's spare room itself, so what a link delivers is what it carries, and a run would
+only stop the upload for the run and its settling, a third of every second (CI 45253171813:
+`trace-drive` drained at 2.7 of its 3.96 Mbit/s). A link back from a stall is still probed at
+once. Tests:
 `tests/recording_upload.rs` (scripted ACKs: losses, another link's ACK, an outage of every link
 with each chunk delivered exactly once, timeouts, late deliveries, the window, the tail,
 wrapping sequences), `tests/freewheel_recording.rs` (the real sender and receiver on the
 simulated network: the copy is the recording byte for byte, through an outage of every link,
-the live stream losing nothing), and `tests/freewheel_zero_allocations.rs` with probing and the
+the live stream losing nothing, latency p99 with the upload on, a restored link's live share,
+a backlog filling links that probing would interrupt), and `tests/freewheel_zero_allocations.rs` with probing and the
 upload on.
 
 Off, both sides are step 5's to the bit: `tests/freewheel_recording_off.rs` digests every

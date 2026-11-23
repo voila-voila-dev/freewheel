@@ -239,6 +239,13 @@ impl RecordingUpload {
             .is_some_and(|at_us| now_us.saturating_sub(at_us) >= self.drain_us)
     }
 
+    /// Bytes the receiver lacks remain and the upload has not given up: it keeps the links'
+    /// spare room filled, which measures them as a probe run would.
+    #[must_use]
+    pub fn has_backlog(&self, now_us: u64) -> bool {
+        !self.abandoned(now_us) && self.delivered_bytes() < self.recording_bytes
+    }
+
     /// Chunks sent so far, resends included.
     #[must_use]
     pub const fn sent_chunks(&self) -> u64 {

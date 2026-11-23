@@ -614,6 +614,13 @@ impl Sender {
         let below_maximum = probing.below_maximum();
         let wanted = probing.wanted(capacity_bps);
         let wanted_capacity_bps = probing.target.wanted_capacity_bps;
+        // An upload with a backlog fills every link's spare room up to its window, and what a
+        // link delivers then is what it carries: a probe run would only stop it for the run
+        // and its settling (a third of every second), so runs wait for the backlog to clear.
+        let uploading = self
+            .recording
+            .as_ref()
+            .is_some_and(|upload| upload.has_backlog(now_us));
         let (session_id, receiver) = (self.session_id, self.receiver);
         for link in &mut self.links {
             link.probe.advance(now_us);
@@ -624,7 +631,7 @@ impl Sender {
                 // A link back from a stall is probed at the rate it had, whatever the others.
                 let returning = link.probe.known_bps.is_some();
                 if !below_maximum
-                    || !(wanted || returning)
+                    || !((wanted && !uploading) || returning)
                     || !link.estimate.has_rtt()
                     || link.proven_full(now_us)
                     || !link.probe.due(now_us)
