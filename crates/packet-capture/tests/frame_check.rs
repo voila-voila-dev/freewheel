@@ -57,6 +57,18 @@ fn tells_missing_corrupted_and_truncated_frames_apart() {
 }
 
 #[test]
+fn counts_the_bytes_of_intact_frames_only() {
+    let received = listing(&[(3000, "b"), (9000, "X"), (12000, "e")]);
+    let check = FrameCheck::compare(&sent(), &received);
+    assert_eq!(
+        check.intact_bytes,
+        2 * 1000,
+        "the corrupted frame's bytes do not count"
+    );
+    assert_eq!(FrameCheck::compare(&sent(), &sent()).intact_bytes, 6 * 1000);
+}
+
+#[test]
 fn nothing_received_never_started() {
     let check = FrameCheck::compare(&sent(), &listing(&[]));
     assert_eq!(check.before_start, 6);

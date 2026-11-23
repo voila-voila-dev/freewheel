@@ -113,6 +113,9 @@ pub struct FrameCheck {
     pub sent: usize,
     /// Sent frames that arrived with exactly the same bytes.
     pub intact: usize,
+    /// Their size, in bytes (0 when the listing gives no sizes): the video a viewer could
+    /// actually watch.
+    pub intact_bytes: u64,
     /// Sent frames that arrived damaged (same timestamp, different bytes).
     pub corrupted: usize,
     /// Sent frames before the first one that arrived: the stream started late (connection
@@ -149,6 +152,7 @@ impl FrameCheck {
             let intact = match arrived.get(&frame.pts) {
                 Some(hash) if *hash == frame.hash => {
                     check.intact += 1;
+                    check.intact_bytes += frame.size_bytes;
                     true
                 }
                 Some(_) => {

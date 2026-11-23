@@ -37,8 +37,12 @@ const MARKS_SUFFIX: &str = ".marks";
 /// scenarios keep the tight bound. The total over every scenario must still be lower.
 const DAMAGED_SLACK_RATIO: f64 = 0.05;
 const DAMAGED_SLACK_FRAMES: f64 = 3.0;
-/// Delivered video may be this much below the baseline's: the encoder's own variation.
-const DELIVERED_SLACK_RATIO: f64 = 0.98;
+/// Intact video may be this much below the baseline's: the encoder's own variation. Judged on
+/// the intact frames, not on the bytes delivered: those count damaged frames too (`trace-drive`:
+/// the baseline delivers 1.8 Mbit/s while two thirds of its frames are damaged), and an encoder
+/// that lowers its bitrate to lose fewer frames delivers fewer bytes by design. The bytes
+/// delivered stay in the table, for information.
+const INTACT_SLACK_RATIO: f64 = 0.98;
 /// Latency may be this much above the baseline's: scheduler noise of a shared host.
 const MEDIAN_LATENCY_SLACK_MS: f64 = 20.0;
 const TAIL_LATENCY_SLACK_MS: f64 = 50.0;
@@ -52,6 +56,7 @@ struct Summary {
     damaged_spread_frames: f64,
     longest_gap_ms: f64,
     delivered_kbps: f64,
+    intact_kbps: f64,
     latency_median_ms: f64,
     latency_p99_ms: f64,
     restored_share_percent: f64,
@@ -77,6 +82,7 @@ struct Sample {
     damaged_frames: Option<f64>,
     longest_gap_ms: Option<f64>,
     delivered_kbps: Option<f64>,
+    intact_kbps: Option<f64>,
     latency_median_ms: Option<f64>,
     latency_p99_ms: Option<f64>,
     restored_share_percent: Option<f64>,
@@ -206,6 +212,7 @@ fn sample(run: &Path, scenario: &str) -> Sample {
         damaged_frames: lab_run.frames.map(|frames| to_f64(frames.damaged())),
         longest_gap_ms: lab_run.frames.map(|frames| to_f64(frames.longest_gap_ms)),
         delivered_kbps: lab_run.delivered_kbps(),
+        intact_kbps: lab_run.intact_kbps(),
         latency_median_ms: lab_run.latency.map(|latency| latency.median_ms),
         latency_p99_ms: lab_run.latency.map(|latency| latency.p99_ms),
         restored_share_percent: (scenario == RESTORED_LINK_SCENARIO)
@@ -223,6 +230,7 @@ fn summary(samples: &[Sample]) -> Summary {
         damaged_spread_frames: spread(samples.iter().filter_map(|s| s.damaged_frames)),
         longest_gap_ms: median_of(|s| s.longest_gap_ms),
         delivered_kbps: median_of(|s| s.delivered_kbps),
+        intact_kbps: median_of(|s| s.intact_kbps),
         latency_median_ms: median_of(|s| s.latency_median_ms),
         latency_p99_ms: median_of(|s| s.latency_p99_ms),
         restored_share_percent: median_of(|s| s.restored_share_percent),
@@ -262,17 +270,18 @@ fn table(results: &Results) -> String {
     let mut text = String::new();
     let _ = writeln!(
         text,
-        "| Scenario | Sender → receiver | Runs | Frames lost or damaged | Longest gap | Delivered | Latency p50 / p99 | Restored link share | Recording delivered |"
+        "| Scenario | Sender → receiver | Runs | Frames lost or damaged | Longest gap | Intact video | Delivered | Latency p50 / p99 | Restored link share | Recording delivered |"
     );
-    let _ = writeln!(text, "|---|---|---|---|---|---|---|---|---|");
+    let _ = writeln!(text, "|---|---|---|---|---|---|---|---|---|---|");
     for ((scenario, combination), s) in results {
         let _ = writeln!(
             text,
-            "| {scenario} | {} | {} | {} | {} ms | {} kbit/s | {} / {} ms | {} | – |",
+            "| {scenario} | {} | {} | {} | {} ms | {} kbit/s | {} kbit/s | {} / {} ms | {} | – |",
             label(combination),
             s.runs,
             show(s.damaged_frames, 0),
             show(s.longest_gap_ms, 0),
+            show(s.intact_kbps, 0),
             show(s.delivered_kbps, 0),
             show(s.latency_median_ms, 0),
             show(s.latency_p99_ms, 0),
@@ -360,10 +369,10 @@ fn gate(results: &Results, candidate: &str) -> Vec<String> {
                             .max(baseline.damaged_spread_frames),
             ),
             (
-                "delivered (kbit/s)",
-                ours.delivered_kbps,
-                baseline.delivered_kbps,
-                ours.delivered_kbps >= baseline.delivered_kbps * DELIVERED_SLACK_RATIO,
+                "intact video (kbit/s)",
+                ours.intact_kbps,
+                baseline.intact_kbps,
+                ours.intact_kbps >= baseline.intact_kbps * INTACT_SLACK_RATIO,
             ),
             (
                 "latency p50 (ms)",
@@ -421,6 +430,7 @@ fn to_json(results: &Results) -> String {
             ("damaged_frames", s.damaged_frames),
             ("longest_gap_ms", s.longest_gap_ms),
             ("delivered_kbps", s.delivered_kbps),
+            ("intact_kbps", s.intact_kbps),
             ("latency_median_ms", s.latency_median_ms),
             ("latency_p99_ms", s.latency_p99_ms),
             ("restored_share_percent", s.restored_share_percent),

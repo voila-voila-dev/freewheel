@@ -180,11 +180,22 @@ impl LabRun {
         seconds.strip_suffix('s')?.parse().ok()
     }
 
-    /// Video the SRT listener delivered, averaged over the time stream 1 ran, in kbit/s.
+    /// Bytes the SRT listener delivered (MPEG-TS: video, damaged frames and audio included),
+    /// averaged over the time stream 1 ran, in kbit/s.
     #[must_use]
     pub fn delivered_kbps(&self) -> Option<f64> {
         let seconds = self.stream_seconds().filter(|seconds| *seconds > 0)?;
         Some(to_f64(self.received_bytes * BITS_PER_BYTE) / to_f64(seconds) / BITS_PER_KILOBIT)
+    }
+
+    /// Video that arrived intact (frames with exactly the bytes the encoder made), averaged
+    /// over the time stream 1 ran, in kbit/s. Unlike [`delivered_kbps`](Self::delivered_kbps),
+    /// damaged frames and the audio do not count: this is what a viewer could watch.
+    #[must_use]
+    pub fn intact_kbps(&self) -> Option<f64> {
+        let seconds = self.stream_seconds().filter(|seconds| *seconds > 0)?;
+        let frames = self.frames.filter(|frames| frames.intact_bytes > 0)?;
+        Some(to_f64(frames.intact_bytes * BITS_PER_BYTE) / to_f64(seconds) / BITS_PER_KILOBIT)
     }
 
     /// Exit codes of the senders that stopped by themselves or were stopped, as `(sender, code)`.

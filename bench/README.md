@@ -49,9 +49,17 @@ Reading:
 
 `labs/srtla-capture/bench-transport.sh` then `bench-transport` (CI job `transport-bench`): what
 M1b is judged on, per scenario. Frames lost or damaged and longest gap (frame by frame),
-delivered bitrate, encoder-to-server latency over the intact frames (SRT's 2 s buffer
-included), restored link share on `link-drop`. Median of the runs. `--gate <receiver>-<sender>`
-checks a candidate against the baseline (and a restored link against an even split). Method in `labs/srtla-capture/README.md` ("Transport bench").
+intact video (the bitrate of the frames that arrived with exactly the encoder's bytes),
+delivered bitrate (every byte the SRT listener got, for information), encoder-to-server latency
+over the intact frames (SRT's 2 s buffer included), restored link share on `link-drop`. Median
+of the runs. `--gate <receiver>-<sender>` checks a candidate against the baseline (and a
+restored link against an even split). Method in `labs/srtla-capture/README.md` ("Transport bench").
+
+Since 2026-11-23 the gate judges the intact video, not the bytes delivered: those count damaged
+frames (on `trace-drive` the baseline delivers 1822 kbit/s, of which 1077 are intact frames,
+CI run 45081482940), and an encoder that lowers its bitrate to lose fewer frames delivers fewer
+bytes by design. Baseline's intact video on that run: 3022–3042 kbit/s on the scenarios that
+lose nothing, `real-ride` 2958, `all-links-drop` 2434, `trace-drive` 1077.
 
 Baseline of 2026-11-17 (CI run 44085568015, `e649d57`, median of 3 runs on the ARM64 runner):
 
