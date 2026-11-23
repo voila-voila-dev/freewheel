@@ -14,13 +14,9 @@ column, empty today (`bench_transport.rs`, "not measured yet"), gets a value.
 
 ## State at handoff
 
-- Branch `m1b-step-5`, not merged yet. Step 5 is done: CI run 45194700354's `transport-bench`
-  beats the baseline on every scenario (`roadmap.md`). In the same run,
-  `srtla-lab` (`group_limit`) and `interop-sender` (`srt_server_restart`) failed on
-  characterisation tests of the upstream server that passed the run before on the same code
-  (except for a bitrate-control change they do not use): probably flaky. Rerun them
-  (`gh run rerun 45194700354 --failed`) before concluding anything.
-- Then: the PR `m1b-step-5` → `main` (if not open yet), and step 6 from it (`m1b-step-6`).
+- Step 5 is done and merged: `main` at `7ad1e8c`, CI run 45194700354 green (its two flaky
+  characterisation tests, `group_limit` and `srt_server_restart`, passed on rerun). Work on
+  branch `m1b-step-6` (from `main`; this plan is its first commit).
 - What step 6 builds on, already there:
   - **Wire format**: the `Background` class (`0x03`) exists (`bonding-protocol/src/freewheel/
     traffic_class.rs`); data payloads are opaque; ACKs carry the session's received sequence
@@ -32,24 +28,37 @@ column, empty today (`bench_transport.rs`, "not measured yet"), gets a value.
   - **Receiver**: background data is counted and acknowledged, then dropped
     (`bonding-receiver/src/freewheel/receiver.rs`, "Background data is counted…").
 
-## What to decide with Emilien first
+## Decisions (Emilien, 2026-11-23, in `decisions.md`)
 
-Ask these questions before building; each one is his call, and the answer goes to `decisions.md`.
-Give a recommendation with each.
+1. **What the lab records**: a file that grows during the run at a constant 6 Mbit/s (2× the
+   live ceiling, as a camera's full-quality file would), random bytes, compared byte for byte
+   with the receiver's copy. The real box later points the sender at the encoder's segments.
+2. **Drain time**: after the stream ends, the links stay up as long as the scenario took; the
+   bench reports the time to 100 %, and judges 100 % at the end of it.
+3. **Share**: only what the live class leaves, never queuing the live traffic. Latency p99 and
+   intact video must not regress against step 5 (CI 45194700354).
+4. **Resume**: across link outages, the sender and the receiver running all along. A restart
+   of either (the box reboots) is a later step: write it in `roadmap.md`, do not build it.
+5. **Everything is a setting**: the recording can be switched on and off, and every number of
+   the upload is configurable, nothing hard-coded (see "Settings" below).
 
-1. **What the lab records.** Recommended: the sender reads a file that grows during the
-   run (the "recording"), written by the lab at a constant rate (e.g. 6 Mbit/s, 2× the live
-   ceiling, as a camera's full-quality file would be), random bytes, so the receiver's copy can
-   be compared byte for byte. The real box later points it at the encoder's segments.
-2. **How long the upload may take after the stream ends** (the drain time the bench allows
-   before judging "100 %"). Recommended: as long as the scenario takes, the links kept up after
-   the stream ends, and the bench reports the time to 100 %.
-3. **How much the background may take.** Recommended: only what the live class leaves, never
-   queuing the live traffic. The gate's latency p99 and intact video must not regress against
-   step 5's numbers.
-4. **Scope of "resumed".** Recommended for step 6: across link outages, with the sender and the
-   receiver running all along. A sender or receiver restart (the box reboots) needs the
-   receiver to tell what it has; write it down as a later step, not now.
+## Settings
+
+One settings type per side (sender, receiver), with documented defaults, built from the
+environment in the binaries (`freewheel_sender.rs`, `freewheel_receiver.rs`, as
+`FREEWHEEL_CAPACITY_SOCKET` and `FREEWHEEL_MAX_VIDEO_BPS` are today), never read deep in the
+code. At least:
+
+- **On/off**: no recording setting, no upload, and the sender and receiver behave exactly as in
+  step 5 (padding for probing included): the step 5 bench numbers must hold with it off.
+- **Sender**: the recording's path; the upload's share of the spare capacity (cap, in per
+  cent); chunk size; loss timeout; how long to keep trying after the stream ends.
+- **Receiver**: on/off, the directory the copies are written to.
+- **Lab**: the recording's rate (default 6 Mbit/s), the drain time, on/off per scenario, through
+  the lab's variables (`labs/srtla-capture/`), with defaults so a bare run stays as today.
+
+Each setting gets a line in its type's doc comment (what, unit, default) and in
+`labs/srtla-capture/README.md` for the lab's. Tests cover "off" as well as "on".
 
 ## Proposed design (to confirm on the bench)
 
@@ -82,7 +91,7 @@ Give a recommendation with each.
 Each step ends with tests, clippy (`-D warnings`), `cargo fmt`, docs, a commit. One lab run
 locally before pushing; the CI's `transport-bench` (3 runs, ~1 h 45) has the last word.
 
-1. Decisions above, in `decisions.md`.
+1. Settings types (sender, receiver, lab), off by default, with tests that "off" is step 5.
 2. Wire: the background payload header in `bonding-protocol`, with its proofs.
 3. Receiver: chunks written at their offset; tests with an in-memory recording, chunks out of
    order and repeated.
@@ -90,9 +99,11 @@ locally before pushing; the CI's `transport-bench` (3 runs, ~1 h 45) has the las
    sequence of ACKs, an outage of every link in the middle.
 5. Lab: the recording writer, `FREEWHEEL_RECORDING*` variables in the scenarios that use our
    transport, the copy compared at the end.
-6. Bench: the column filled, the gate on 100 %, the live gates unchanged.
+6. Bench: the column filled, the gate on 100 %, the live gates unchanged, with the recording
+   on and off.
 7. Scheduling beyond the probe runs, opened up step by step as long as the live metrics hold.
-8. `roadmap.md` (step 6 ✅ with the CI numbers), `freewheel.md` (design and results), PR.
+8. `roadmap.md` (step 6 ✅ with the CI numbers; the restart resume as a later step),
+   `freewheel.md` (design and results), then merge into `main` (fast-forward, as steps 1–5).
 
 ## Lessons from step 5 (save yourself the time)
 
