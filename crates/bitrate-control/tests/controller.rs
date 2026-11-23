@@ -66,20 +66,17 @@ fn falls_to_what_the_links_carry_within_one_window() {
 }
 
 #[test]
-fn falls_by_at_least_a_fifth_then_holds_once_the_stream_fits() {
+fn keeps_falling_by_a_fifth_per_window_while_pressure_lasts() {
     let mut controller = started();
-    // 4 Mbit/s fits 2.68 Mbit/s of video; the first decrease takes a fifth.
+    // On links that stay, the measured capacity lags a drop: the pressure is the measure.
     assert_eq!(
-        feed(&mut controller, 4_000, 4_600, strained(4_000_000)),
+        feed(&mut controller, 4_000, 4_600, strained(20_000_000)),
         2_400_000
     );
-    // The stream fits: the pressure that lasts is not the encoder's.
     assert_eq!(
-        feed(&mut controller, 4_600, 8_000, strained(4_000_000)),
-        2_400_000
+        feed(&mut controller, 4_600, 5_200, strained(20_000_000)),
+        1_920_000
     );
-    // Less capacity: down again.
-    assert!(feed(&mut controller, 8_000, 8_600, strained(2_000_000)) < 1_300_000);
 }
 
 #[test]

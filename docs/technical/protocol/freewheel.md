@@ -191,7 +191,7 @@ missing exactly when frames are lost. Next is step 5, the encoder's bitrate foll
 `freewheel-sender` reports what the links carry every 100 ms (`bitrate_control::CapacityReport`,
 JSON on a Unix socket); the lab's encoder (`lab-encoder`) follows `bitrate_control::Controller`:
 under pressure (1 % dropped at the box, or 20 % queuing), down to 80 % of the capacity and by
-at least a fifth, unless the stream already fits there; once calm (2 s), straight to what the
+at least a fifth, unless links were just cut and the stream fits what the others carry; once calm (2 s), straight to what the
 measured capacity carries with that headroom, then +5 % every 500 ms beyond it. When links come
 back, straight to what they carry at the first report. An outage of every link holds the
 bitrate.
@@ -247,9 +247,12 @@ What the reports and the encoded frames then showed, and what changed:
   `follows_a_higher_bitrate_within_a_second`.
 - **The pressure after a cut is not the encoder's.** With two links cut, every byte sent on the
   third was late (overflow = sent) and the box dropped 1–17 Mbit/s: SRT retransmitting what the
-  cut links lost. Lowering the picture does not relieve it, so the controller no longer lowers a
-  stream that fits what the links are measured to carry, and climbs at once when links come back
-  (both outages and partial cuts), without waiting for calm.
+  cut links lost. Lowering the picture does not relieve it, so after a cut (fewer usable links
+  than in the last calm window) the controller no longer lowers a stream that fits what the
+  others are measured to carry, and it climbs at once when links come back (both outages and
+  partial cuts), without waiting for calm. Only after a cut: on links that stay, the measured
+  capacity lags a drop (`trace-drive`, 43.4 s: 5.7 Mbit/s reported for ~3.4 carried), and
+  holding there lost 432 frames in a lab run against 172 with the pressure as the measure.
 - **An outage of every link holds the bitrate** (decided on the bench, `decisions.md`): nothing
   measures the links while they are all down, and they come back at the rate they had. Lab, one
   run of `all-links-drop`: 132 frames lost and a 4.1 s gap at the held bitrate, against 195 and

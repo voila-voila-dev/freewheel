@@ -5,10 +5,11 @@
 //! keyframe is a burst that queues for a few milliseconds on links that have room to spare.
 //! Under pressure (the transport drops at the box, or much of the stream queues in the
 //! modems), the bitrate falls to what the links carry with some headroom, and by at least a
-//! fifth each time, unless the stream already fits there (or no link is usable at all: an
-//! outage says nothing of what the links carry, the bitrate holds): then the pressure is not the
-//! encoder's (SRT catching up on what a cut link lost) and lowering the picture would not
-//! relieve it. Once calm, it climbs straight back to what the links are measured to carry, or a
+//! fifth each time. Two exceptions: no link is usable at all (an outage says nothing of what the
+//! links carry, the bitrate holds), or some links were just lost and the stream fits what the
+//! others carry (the pressure is SRT catching up on what the cut links lost, and lowering the
+//! picture would not relieve it). Only after a cut: on links that stay, the capacity measured
+//! lags a drop, and the pressure is the measure. Once calm, it climbs straight back to what the links are measured to carry, or a
 //! little at a time beyond; when links come back (an outage, or a cut of some of them), at
 //! once. The transport measures what an unsaturated link
 //! would carry by probing it with padding (`freewheel-sender`), up to what the encoder's
@@ -119,6 +120,8 @@ pub struct Controller {
     last_pressure_ms: Option<u64>,
     /// Usable links during the last pressure, until more of them come back.
     links_at_pressure: Option<u8>,
+    /// Usable links during the last window without pressure.
+    links_when_calm: u8,
     last_increase_ms: Option<u64>,
 }
 
@@ -133,6 +136,7 @@ impl Controller {
             first_traffic_ms: None,
             last_pressure_ms: None,
             links_at_pressure: None,
+            links_when_calm: 0,
             last_increase_ms: None,
         }
     }
@@ -189,8 +193,10 @@ impl Controller {
                 // the rate they had, the frames the outage held back and the next ones are
                 // better at full quality (lab: 132 frames lost against 195 at the minimum).
                 self.bitrate_bps
-            } else if self.bitrate_bps <= fitting_bps {
-                // The stream fits: the pressure is not the encoder's.
+            } else if window.min_usable_links < self.links_when_calm
+                && self.bitrate_bps <= fitting_bps
+            {
+                // Links were just cut and the stream fits the others: SRT's catch-up.
                 self.bitrate_bps
             } else {
                 fitting_bps.min(percent_of(self.bitrate_bps, s.decrease_percent))
@@ -198,6 +204,7 @@ impl Controller {
             self.bitrate_bps = s.bounds.clamp(lower);
             return self.bitrate_bps;
         }
+        self.links_when_calm = window.min_usable_links;
         let calm = self
             .last_pressure_ms
             .is_none_or(|at_ms| now_ms.saturating_sub(at_ms) >= s.calm_ms);
