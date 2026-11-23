@@ -12,4 +12,5 @@ For people who build and run freewheel. Users start with [`../guide/`](../guide/
 | [roadmap.md](roadmap.md) | Milestones and what "done" means for each |
 | [decisions.md](decisions.md) | Every decision, dated, newest last |
 | [protocol/](protocol/) | Wire formats: our transport, SRTLA compatibility |
+| [plans/](plans/) | Handoffs: the plan of the next step, for whoever takes it |
 | [research/](research/) | Background studies, synthesis first |
