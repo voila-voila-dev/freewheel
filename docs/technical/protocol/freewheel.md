@@ -275,6 +275,31 @@ CI run 45194700354 (3 runs, medians): our transport beats the baseline on every 
 `trace-drive` 2118, 172, 924 ms (1051, 1754, 3333 ms); `all-links-drop` 2538, 186, 6.1 s (2434,
 209, 6.9 s); `link-drop` 3056, restored link 50 % (3028, 13 %).
 
+## Recording upload (M1b step 6)
+
+The background class carries the full-quality recording to the server, on the capacity the live
+class leaves, resumed across link outages (plan and Emilien's decisions:
+`plans/m1b-step-6.md`).
+
+**Everything is a setting, off by default.** One type per side, read from the environment by
+the binaries only:
+
+- `bonding_sender::freewheel::RecordingSettings`: `FREEWHEEL_RECORDING` (the recording's path;
+  unset, no upload), then `FREEWHEEL_RECORDING_` + `CHUNK_BYTES` (1471, a full datagram),
+  `SHARE_PERCENT` (of the room the live traffic leaves; 50), `LOSS_TIMEOUT_MS` (1500),
+  `END_IDLE_MS` (the recording has ended when it has not grown for that long; 2000), `DRAIN_S`
+  (how long the upload keeps trying after that; 3600), `WINDOW_BYTES` (256 MiB beyond the first
+  byte not delivered), `IN_FLIGHT_CHUNKS` (8192).
+- `bonding_receiver::freewheel::RecordingSettings`: `FREEWHEEL_RECORDING_DIR` (where copies go;
+  unset, background data is acknowledged and dropped), `FREEWHEEL_RECORDING_QUEUE_CHUNKS`
+  (chunks waiting for the disk; 4096), `FREEWHEEL_RECORDING_ACK_RANGES` (ranges per ACK; 16).
+- The lab: `RECORDING`, `RECORDING_BPS`, `RECORDING_DRAIN_S` (`labs/srtla-capture/README.md`,
+  "Recording upload").
+
+Off, both sides are step 5's to the bit: `tests/freewheel_recording_off.rs` digests every
+datagram either side sends, with its time and link, over a simulated run with probing, an outage
+of every link and SRT answers, and compares it with the digest of step 5's code.
+
 ## Alternative to evaluate
 
 Multipath QUIC with datagrams (IETF draft): a standard, but a large dependency and less control over media-aware scheduling.

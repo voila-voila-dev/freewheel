@@ -57,6 +57,27 @@ readonly SRTLA_PORT=5000
 readonly SRT_LISTENER_PORT=5002
 readonly SRT_LATENCY_MS=2000
 BITRATE=${BITRATE:-3M}
+# The recording upload (M1b step 6, README "Recording upload"): RECORDING=1 makes the box record a
+# file growing at RECORDING_BPS while the stream runs, which freewheel-sender uploads and
+# freewheel-receiver writes back; then the links stay up for RECORDING_DRAIN_S (empty: as long as
+# the stream ran) or until the copy is whole. Only with SENDER=transport RECEIVER=transport; a
+# scenario may set RECORDING=0 to opt out. Off by default: a bare run is as before.
+RECORDING=${RECORDING:-0}
+RECORDING_BPS=${RECORDING_BPS:-6000000}
+RECORDING_DRAIN_S=${RECORDING_DRAIN_S:-}
+case "$RECORDING" in
+	0 | 1) ;;
+	*)
+		echo "unknown RECORDING=$RECORDING (0 or 1)" >&2
+		exit 2
+		;;
+esac
+case "$RECORDING_BPS$RECORDING_DRAIN_S" in
+	*[!0-9]*)
+		echo "RECORDING_BPS=$RECORDING_BPS, RECORDING_DRAIN_S=$RECORDING_DRAIN_S: whole numbers (bit/s, seconds)" >&2
+		exit 2
+		;;
+esac
 
 # The listener's output goes through frame-times (when mounted), which appends it to
 # <scenario>.ts and dates each frame as it is delivered: <scenario>.received.times.

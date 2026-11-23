@@ -110,6 +110,22 @@ average bitrate mode took ~10 s to follow a raise (`decisions.md`).
 Every bitrate it takes is a mark, `encoder bitrate <bit/s>`; `LAB_ENCODER_LOG_REPORTS=1` marks
 every report too. The audio comes from its own ffmpeg, live, through a FIFO (`decisions.md`).
 
+### Recording upload (M1b step 6)
+
+`RECORDING=1`, with `SENDER=transport RECEIVER=transport`, adds the background class: the box
+records a file of random bytes growing at a constant rate while the stream runs (a camera's
+full-quality file), `freewheel-sender` uploads it on the links' spare capacity and
+`freewheel-receiver` writes its copy. After the stream, the links stay as they are for the drain
+time, or until the copy is whole; then the copy is compared with the recording byte for byte.
+Off by default: a bare run is as before. A scenario may set `RECORDING=0` itself to opt out.
+
+| Variable | What | Default |
+|---|---|---|
+| `RECORDING` | `1`: record and upload | `0` |
+| `RECORDING_BPS` | the recording's rate, in bit/s | `6000000` (2× the live ceiling) |
+| `RECORDING_DRAIN_S` | how long the links stay up after the stream, in seconds | empty: as long as the stream ran |
+| `FREEWHEEL_RECORDING_*` | the sender's and the receiver's own settings (`RecordingSettings` of `bonding-sender` and `bonding-receiver`), passed through | theirs |
+
 ### Frame times and latency
 
 `frame-times` (`crates/packet-capture`, built for Linux by `run-all.sh` and mounted with ours)

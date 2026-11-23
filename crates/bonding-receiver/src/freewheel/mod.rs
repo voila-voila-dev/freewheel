@@ -8,12 +8,19 @@
 mod limits;
 mod link;
 mod receiver;
+mod recording_settings;
 mod session;
+mod setting_error;
 
 pub use limits::{
     ACK_EVERY_PACKETS, ACK_MAX_DELAY_US, LINK_TIMEOUT_US, MAX_LINKS_PER_SESSION, MAX_SESSIONS,
     SESSION_TIMEOUT_US,
 };
 pub use receiver::Receiver;
+pub use recording_settings::{
+    ACKNOWLEDGED_RANGES_VARIABLE, DEFAULT_ACKNOWLEDGED_RANGES, DEFAULT_WRITER_QUEUE_CHUNKS,
+    DIRECTORY_VARIABLE, MAX_ACKNOWLEDGED_RANGES, RecordingSettings, WRITER_QUEUE_CHUNKS_VARIABLE,
+};
+pub use setting_error::SettingError;
 
 pub use crate::srtla::{GroupHandle, IoFailure, ReceiverEvent, ReceiverIo};

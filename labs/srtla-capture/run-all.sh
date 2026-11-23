@@ -9,6 +9,9 @@
 #   CAPTURES_DIR=<dir> overrides where the run goes (labs/srtla-capture/bench.sh uses it).
 #   DISCARD_VIDEO=1 keeps only the frame digests and the received size; CAPTURE_SNAPLEN=<n> keeps
 #   the first n bytes of each packet (scenarios may set their own).
+#   RECORDING=1 (with transport/transport) uploads a recording too, at RECORDING_BPS, drained for
+#   RECORDING_DRAIN_S; every FREEWHEEL_RECORDING_* variable goes to the sender and the receiver
+#   (README, "Recording upload").
 set -euo pipefail
 
 lab=$(cd "$(dirname "$0")" && pwd)
@@ -60,9 +63,15 @@ done
 mkdir -p "$root/.cache/traces"
 mounts+=(-v "$root/.cache/traces:/opt/traces:ro")
 
+# The recording's settings, and every FREEWHEEL_RECORDING_* the caller set, go to the lab.
+recording_variables=(-e RECORDING="${RECORDING:-0}" -e RECORDING_BPS="${RECORDING_BPS:-}" -e RECORDING_DRAIN_S="${RECORDING_DRAIN_S:-}")
+while read -r variable; do
+	recording_variables+=(-e "$variable")
+done < <(env | sed -n 's/^\(FREEWHEEL_RECORDING[A-Z_]*\)=.*/\1/p')
+
 run_one() {
 	local scenario=$1
-	if docker run --rm --privileged -e RECEIVER="$receiver" -e SENDER="$sender" -e DISCARD_VIDEO="${DISCARD_VIDEO:-0}" -e CAPTURE_SNAPLEN="${CAPTURE_SNAPLEN:-0}" -e ENCODER="${ENCODER:-}" -e LAB_ENCODER_LOG_REPORTS="${LAB_ENCODER_LOG_REPORTS:-}" ${mounts[@]+"${mounts[@]}"} -v "$out:/out" "freewheel-srtla-$target" "$scenario" > "$out/runs/$scenario.log" 2>&1; then
+	if docker run --rm --privileged -e RECEIVER="$receiver" -e SENDER="$sender" -e DISCARD_VIDEO="${DISCARD_VIDEO:-0}" -e CAPTURE_SNAPLEN="${CAPTURE_SNAPLEN:-0}" -e ENCODER="${ENCODER:-}" -e LAB_ENCODER_LOG_REPORTS="${LAB_ENCODER_LOG_REPORTS:-}" "${recording_variables[@]}" ${mounts[@]+"${mounts[@]}"} -v "$out:/out" "freewheel-srtla-$target" "$scenario" > "$out/runs/$scenario.log" 2>&1; then
 		tail -1 "$out/runs/$scenario.log"
 	else
 		echo "$scenario: FAILED (see $out/runs/$scenario.log)"

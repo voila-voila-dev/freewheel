@@ -6,6 +6,10 @@
 //! the encoder's bitrate. With `FREEWHEEL_MAX_VIDEO_BPS` (the encoder's ceiling) and
 //! `FREEWHEEL_AUDIO_BPS` too, it probes the links' spare capacity while the encoder is below
 //! its ceiling (`bonding_sender::freewheel::ProbeTarget`).
+//!
+//! With `FREEWHEEL_RECORDING=<path>`, it uploads that recording on the links' spare capacity
+//! (the background class); every number of the upload is a `FREEWHEEL_RECORDING_*` variable
+//! (`bonding_sender::freewheel::RecordingSettings`). Without it, no upload.
 
 use std::net::{Ipv4Addr, UdpSocket};
 use std::path::PathBuf;
@@ -13,7 +17,7 @@ use std::process::ExitCode;
 use std::sync::atomic::AtomicBool;
 
 use bitrate_control::ControllerSettings;
-use bonding_sender::freewheel::{ProbeTarget, Sender};
+use bonding_sender::freewheel::{ProbeTarget, RecordingSettings, Sender};
 use bonding_sender::server::{
     CapacityOutput, FREEWHEEL_WAKE_INTERVAL, SenderConfig, UdpIo, random_session_id,
     read_source_list, serve_freewheel,
@@ -74,8 +78,10 @@ fn run(arguments: &[String]) -> Result<(), String> {
     if let Some(target) = probe_target {
         sender.enable_probing(target);
     }
+    let recording = RecordingSettings::from_environment(|name| std::env::var(name).ok())
+        .map_err(|error| error.to_string())?;
     eprintln!(
-        "freewheel-sender: SRT on port {}, receiver at {receiver}{}{}",
+        "freewheel-sender: SRT on port {}, receiver at {receiver}{}{}{}",
         config.listen_port,
         capacity_path
             .as_deref()
@@ -83,6 +89,10 @@ fn run(arguments: &[String]) -> Result<(), String> {
             .unwrap_or_default(),
         probe_target
             .map(|target| format!(", probing up to {} bit/s", target.wanted_capacity_bps))
+            .unwrap_or_default(),
+        recording
+            .as_ref()
+            .map(|settings| format!(", uploading {settings:?}"))
             .unwrap_or_default()
     );
     serve_freewheel(

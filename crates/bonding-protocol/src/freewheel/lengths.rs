@@ -27,3 +27,8 @@ pub const MAX_DATAGRAM_LEN: usize = 1_500;
 pub const MAX_DATA_PAYLOAD_LEN: usize = MAX_DATAGRAM_LEN - DATA_HEADER_LEN;
 /// Most ranges one ACK carries within [`MAX_DATAGRAM_LEN`].
 pub const MAX_ACK_RANGES: usize = (MAX_DATAGRAM_LEN - ACK_HEADER_LEN) / SEQUENCE_RANGE_LEN;
+/// Length of a background payload's header before a recording chunk's bytes: its kind (one
+/// byte), then the chunk's offset in the recording (64 bits).
+pub const RECORDING_CHUNK_HEADER_LEN: usize = 1 + 8;
+/// Most recording bytes one data packet carries within [`MAX_DATAGRAM_LEN`].
+pub const MAX_RECORDING_CHUNK_LEN: usize = MAX_DATA_PAYLOAD_LEN - RECORDING_CHUNK_HEADER_LEN;

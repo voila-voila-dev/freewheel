@@ -23,6 +23,10 @@ const TICK_US: u64 = 1_000;
 const REPORT_PERIOD_US: u64 = 100_000;
 const BITS_PER_BYTE: u64 = 8;
 const MICROSECONDS_PER_SECOND: u64 = 1_000_000;
+const FNV_OFFSET_BASIS: u64 = 0xCBF2_9CE4_8422_2325;
+const FNV_PRIME: u64 = 0x0000_0100_0000_01B3;
+/// Downlink datagrams are digested as links 256 and up, so a direction change shows.
+const DOWNLINK_DIGEST_OFFSET: usize = 256;
 
 /// One link's behaviour, uplink (box → server); the downlink only has the delay.
 #[derive(Debug, Clone, Copy)]
@@ -146,6 +150,8 @@ pub struct Network {
     /// Capacity reports taken every [`REPORT_PERIOD_US`] once probing is on, latest last.
     reports: Option<Vec<CapacityReport>>,
     next_report_us: u64,
+    /// FNV-1a over every datagram either side sent, with when and on which link.
+    wire_digest: u64,
 }
 
 fn source(link: usize) -> Ipv4Addr {
@@ -195,6 +201,7 @@ impl Network {
             next_stream_us: 0,
             reports: None,
             next_report_us: 0,
+            wire_digest: FNV_OFFSET_BASIS,
         }
     }
 
@@ -365,12 +372,31 @@ impl Network {
         self.flush(at_us);
     }
 
+    /// A digest of every datagram either side sent so far, with when and on which link: two
+    /// runs that send the same bytes at the same times on the same links have the same one.
+    pub const fn wire_digest(&self) -> u64 {
+        self.wire_digest
+    }
+
+    fn digest(&mut self, now_us: u64, link: usize, datagram: &[u8]) {
+        let link = u64::try_from(link).unwrap_or(u64::MAX);
+        for byte in now_us
+            .to_be_bytes()
+            .iter()
+            .chain(&link.to_be_bytes())
+            .chain(datagram)
+        {
+            self.wire_digest = (self.wire_digest ^ u64::from(*byte)).wrapping_mul(FNV_PRIME);
+        }
+    }
+
     /// Puts what both sides sent on the wire.
     fn flush(&mut self, now_us: u64) {
         for (handle, datagram) in std::mem::take(&mut self.sender_side.outbox) {
             let Some(link) = self.handles.iter().position(|h| *h == handle) else {
                 continue;
             };
+            self.digest(now_us, link, &datagram);
             let Some(sim) = self.links.get_mut(link) else {
                 continue;
             };
@@ -394,6 +420,7 @@ impl Network {
             let Some(link) = (0..self.links.len()).find(|k| source_address(*k) == address) else {
                 continue;
             };
+            self.digest(now_us, link + DOWNLINK_DIGEST_OFFSET, &datagram);
             let Some(sim) = self.links.get(link) else {
                 continue;
             };
