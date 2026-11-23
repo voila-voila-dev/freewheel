@@ -221,6 +221,19 @@ after `all-links-drop`, at +5–15 % a step). So the sender probes (`bonding_sen
 Padding is the stand-in for the recording upload (step 6): the same class, the same spare
 capacity, then doing useful work.
 
+CI, 3 runs (run 45135774902), intact video against the baseline (`upstream/upstream`):
+`trace-drive` 1906 kbit/s against 1093 (164 frames lost against 1717), `all-links-drop` 2190
+against 2434 (186 frames lost against 209, longest gap 6.1 s against 6.9 s), `real-ride` 2801
+against 2974 (18 frames lost against 45); the other scenarios equal. The gate still fails on the
+last two:
+
+- `all-links-drop`: the encoder is back at 3 Mbit/s 1.2 s after the links return (18 s before
+  probing), but during the outage it went down to 0.3 Mbit/s. The frames of the outage's last
+  seconds arrive, light; the baseline loses them at full size.
+- `real-ride`: when two of three links are cut (92.7 s), the encoder steps down to 0.33 Mbit/s
+  although the third link carries 2 Mbit/s, then climbs back by 99.4 s. Where the pressure comes
+  from (SRT's catch-up on the surviving link?) is not yet measured.
+
 ## Alternative to evaluate
 
 Multipath QUIC with datagrams (IETF draft): a standard, but a large dependency and less control over media-aware scheduling.
