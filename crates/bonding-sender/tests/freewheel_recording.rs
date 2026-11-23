@@ -201,7 +201,7 @@ fn a_restored_link_still_gets_an_even_share_of_the_live_stream() {
     ]);
     network.enable_recording(&recording_settings());
     let chunk = random_bytes(75_000, 5);
-    let mut run = |network: &mut Network, seconds: u64, link_up: Option<bool>| {
+    let run = |network: &mut Network, seconds: u64, link_up: Option<bool>| {
         if let Some(up) = link_up {
             network.set_up(1, up);
         }
