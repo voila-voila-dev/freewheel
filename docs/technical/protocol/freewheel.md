@@ -258,6 +258,18 @@ What the reports and the encoded frames then showed, and what changed:
   run of `all-links-drop`: 132 frames lost and a 4.1 s gap at the held bitrate, against 195 and
   6.4 s at the minimum (baseline 209, 6.9 s); 2683 kbit/s intact against 2475 (baseline 2434).
 
+CI run 45173685823 (3 runs, medians): every scenario beat the baseline but `real-ride`, 2891
+kbit/s intact against 2970 (16 frames lost against 49). Its reports showed why:
+
+- **The links that stay are measured low at a cut.** They carried little before it, and the
+  transport probes them up: at the cut of link 1 (20 s), 2.1 Mbit/s measured on links 2 and 3,
+  4.9 Mbit/s 300 ms later. Judged on the first measure, the stream went down to 1.3 Mbit/s for
+  3 s. A report showing links cut now starts a window of its own, 300 ms
+  (`ControllerSettings::cut_window_ms`), judged on its last measure: soon enough for a cut the
+  others cannot carry (two links cut at 90 s: down 0.7 s after the cut). Waiting for a full
+  window instead (500 ms more) lost 45 frames there in a lab run. Lab, one run: `real-ride` 2944
+  kbit/s intact, 3 frames lost; `trace-drive` 2163, 188; `all-links-drop` 2510, 189.
+
 ## Alternative to evaluate
 
 Multipath QUIC with datagrams (IETF draft): a standard, but a large dependency and less control over media-aware scheduling.

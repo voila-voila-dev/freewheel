@@ -88,9 +88,11 @@ fn a_cut_of_some_links_holds_what_the_others_carry_and_climbs_back_when_they_ret
         overflow_bps: 3_000_000,
         ..strained(2_000_000)
     };
-    let held = feed(&mut controller, 4_000, 4_600, cut);
+    // Judged 300 ms after the first report of the cut, not at the end of a full window.
+    assert_eq!(feed(&mut controller, 4_000, 4_300, cut), MAX_BPS);
+    let held = controller.on_report(4_300, &cut);
     assert!((1_250_000..=1_300_000).contains(&held), "{held}");
-    assert_eq!(feed(&mut controller, 4_600, 8_000, cut), held);
+    assert_eq!(feed(&mut controller, 4_400, 8_000, cut), held);
     // The first report with the links back is enough.
     let back = CapacityReport {
         usable_links: 3,
@@ -98,6 +100,21 @@ fn a_cut_of_some_links_holds_what_the_others_carry_and_climbs_back_when_they_ret
     };
     assert_eq!(controller.on_report(8_000, &back), MAX_BPS);
     assert_eq!(feed(&mut controller, 8_100, 12_000, back), MAX_BPS);
+}
+
+#[test]
+fn a_cut_holds_while_the_links_that_stay_are_measured_anew() {
+    let mut controller = started();
+    // They carried little before the cut: their measure starts low and climbs as they are
+    // probed, to what fits the stream.
+    let cut = |capacity_bps| CapacityReport {
+        usable_links: 1,
+        overflow_bps: 3_000_000,
+        ..strained(capacity_bps)
+    };
+    assert_eq!(feed(&mut controller, 4_000, 4_200, cut(2_000_000)), MAX_BPS);
+    assert_eq!(controller.on_report(4_200, &cut(3_000_000)), MAX_BPS);
+    assert_eq!(feed(&mut controller, 4_300, 6_000, cut(5_000_000)), MAX_BPS);
 }
 
 #[test]

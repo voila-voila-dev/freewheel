@@ -7,7 +7,7 @@
 //! modems), the bitrate falls to what the links carry with some headroom, and by at least a
 //! fifth each time. Two exceptions: no link is usable at all (an outage says nothing of what the
 //! links carry, the bitrate holds), or some links were just lost and the stream fits what the
-//! others carry (the pressure is SRT catching up on what the cut links lost, and lowering the
+//! others carry once probed (the pressure is SRT catching up on what the cut links lost, and lowering the
 //! picture would not relieve it). Only after a cut: on links that stay, the capacity measured
 //! lags a drop, and the pressure is the measure. Once calm, it climbs straight back to what the links are measured to carry, or a
 //! little at a time beyond; when links come back (an outage, or a cut of some of them), at
@@ -33,6 +33,10 @@ pub struct ControllerSettings {
     pub headroom_percent: u32,
     /// Reports are added up over this long before the controller judges them, in ms.
     pub window_ms: u64,
+    /// When a report shows links cut, a window starts on it and lasts this long, in ms: the
+    /// links that stay carried little before, and the transport probes them up to what they
+    /// carry before they are judged.
+    pub cut_window_ms: u64,
     /// Pressure: data dropped at the box over the window, in per cent of what was sent...
     pub dropped_percent: u32,
     /// ...or data sent to arrive late (queuing), in per cent of what was sent.
@@ -69,6 +73,8 @@ impl ControllerSettings {
             wire_permille: 1_140,
             headroom_percent: 80,
             window_ms: 500,
+            // Lab: 2.1 Mbit/s measured at a cut, 4.9 Mbit/s 300 ms later.
+            cut_window_ms: 300,
             dropped_percent: 1,
             overflow_percent: 20,
             startup_grace_ms: 3_000,
@@ -107,6 +113,9 @@ struct Window {
     overflow_bps: u64,
     dropped_bps: u64,
     min_capacity_bps: u64,
+    /// Capacity of the last report: after a cut, the links that stay are measured anew as they
+    /// are probed, and the last measure is the best one.
+    last_capacity_bps: u64,
     min_usable_links: u8,
 }
 
@@ -122,6 +131,8 @@ pub struct Controller {
     links_at_pressure: Option<u8>,
     /// Usable links during the last window without pressure.
     links_when_calm: u8,
+    /// When a window first had fewer usable links than the last calm one.
+    cut_seen_ms: Option<u64>,
     last_increase_ms: Option<u64>,
 }
 
@@ -137,6 +148,7 @@ impl Controller {
             last_pressure_ms: None,
             links_at_pressure: None,
             links_when_calm: 0,
+            cut_seen_ms: None,
             last_increase_ms: None,
         }
     }
@@ -156,6 +168,14 @@ impl Controller {
         if self.links_came_back(now_ms, report) {
             return self.bitrate_bps;
         }
+        if self.cut_seen_ms.is_none()
+            && report.usable_links > 0
+            && report.usable_links < self.links_when_calm
+        {
+            // The links that stay are judged on what they report from now on.
+            self.cut_seen_ms = Some(now_ms);
+            self.window = None;
+        }
         let window = self.window.get_or_insert(Window {
             started_ms: now_ms,
             min_capacity_bps: u64::MAX,
@@ -166,8 +186,14 @@ impl Controller {
         window.overflow_bps += report.overflow_bps;
         window.dropped_bps += report.dropped_bps;
         window.min_capacity_bps = window.min_capacity_bps.min(report.capacity_bps);
+        window.last_capacity_bps = report.capacity_bps;
         window.min_usable_links = window.min_usable_links.min(report.usable_links);
-        if now_ms.saturating_sub(window.started_ms) < s.window_ms {
+        let length_ms = if self.cut_seen_ms == Some(window.started_ms) {
+            s.cut_window_ms
+        } else {
+            s.window_ms
+        };
+        if now_ms.saturating_sub(window.started_ms) < length_ms {
             return self.bitrate_bps;
         }
         let window = *window;
@@ -179,6 +205,7 @@ impl Controller {
         let overflowed =
             window.overflow_bps * 100 > window.sent_bps * u64::from(s.overflow_percent);
         let outage = window.min_usable_links == 0;
+        let cut = window.min_usable_links < self.links_when_calm;
         if outage || (!in_grace && (dropped || overflowed)) {
             self.last_pressure_ms = Some(now_ms);
             self.links_at_pressure = Some(
@@ -193,10 +220,9 @@ impl Controller {
                 // the rate they had, the frames the outage held back and the next ones are
                 // better at full quality (lab: 132 frames lost against 195 at the minimum).
                 self.bitrate_bps
-            } else if window.min_usable_links < self.links_when_calm
-                && self.bitrate_bps <= fitting_bps
-            {
-                // Links were just cut and the stream fits the others: SRT's catch-up.
+            } else if cut && self.bitrate_bps <= self.fitting_bps(window.last_capacity_bps) {
+                // Links were just cut and the stream fits the others, on their last measure
+                // (they are probed up from what they carried before): SRT's catch-up.
                 self.bitrate_bps
             } else {
                 fitting_bps.min(percent_of(self.bitrate_bps, s.decrease_percent))
@@ -205,6 +231,7 @@ impl Controller {
             return self.bitrate_bps;
         }
         self.links_when_calm = window.min_usable_links;
+        self.cut_seen_ms = None;
         let calm = self
             .last_pressure_ms
             .is_none_or(|at_ms| now_ms.saturating_sub(at_ms) >= s.calm_ms);
@@ -239,6 +266,7 @@ impl Controller {
             return false;
         }
         self.links_at_pressure = None;
+        self.cut_seen_ms = None;
         let fitting_bps = self.fitting_bps(report.capacity_bps);
         if fitting_bps <= self.bitrate_bps {
             return false;
