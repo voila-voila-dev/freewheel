@@ -4,9 +4,11 @@
 //! Reports are judged over a window of [`ControllerSettings::window_ms`], not one by one: a
 //! keyframe is a burst that queues for a few milliseconds on links that have room to spare.
 //! Under pressure (the transport drops at the box, or much of the stream queues in the modems), the bitrate falls to what the links carry with some headroom, and by at
-//! least a fifth each time; once calm, it climbs back a little at a time. The transport cannot
-//! say how much more an unsaturated link would carry (it only measures what it was given), so
-//! climbing is probing.
+//! least a fifth each time; once calm, it climbs straight back to what the links are measured
+//! to carry, or a little at a time beyond. The transport measures what an unsaturated link
+//! would carry by probing it with padding (`freewheel-sender`), up to what the encoder's
+//! maximum needs ([`ControllerSettings::capacity_for_bps`]); beyond the measure, climbing is
+//! probing.
 
 use crate::{Bounds, CapacityReport};
 
@@ -34,13 +36,14 @@ pub struct ControllerSettings {
     pub startup_grace_ms: u64,
     /// Each decrease takes the bitrate to at most this share of the current one, in per cent.
     pub decrease_percent: u32,
-    /// Time without pressure before climbing, in milliseconds.
+    /// Time without pressure before climbing, in milliseconds...
     pub calm_ms: u64,
-    /// Each climbing step adds this share of the current bitrate, in per cent (probing)...
+    /// ...or this, when the pressure was no usable link at all: an outage is not congestion,
+    /// and the links that come back are probed at the rate they had (`freewheel-sender`).
+    pub calm_after_outage_ms: u64,
+    /// While the measured capacity, with headroom, fits more, a climbing step goes straight to
+    /// it; else it adds this share of the current bitrate, in per cent (probing)...
     pub increase_percent: u32,
-    /// ...or this share while the measured capacity, with headroom, still fits more (after an
-    /// outage the links keep their rate history: the capacity is known before it is used)...
-    pub fast_increase_percent: u32,
     /// ...every this many milliseconds.
     pub increase_step_ms: u64,
 }
@@ -66,10 +69,29 @@ impl ControllerSettings {
             startup_grace_ms: 3_000,
             decrease_percent: 80,
             calm_ms: 2_000,
+            calm_after_outage_ms: 500,
             increase_percent: 5,
-            fast_increase_percent: 15,
             increase_step_ms: 500,
         }
+    }
+
+    /// What a stream of `video_bps` costs on the wire, with the rest of the stream and every
+    /// header, in bit/s.
+    #[must_use]
+    pub const fn wire_bps(&self, video_bps: u32) -> u64 {
+        (video_bps as u64 + self.other_bps as u64) * self.wire_permille as u64 / 1_000
+    }
+
+    /// The capacity the links must be measured at for the controller to let the encoder reach
+    /// `video_bps`, headroom included, in bit/s: how far the transport needs to probe.
+    #[must_use]
+    pub const fn capacity_for_bps(&self, video_bps: u32) -> u64 {
+        let headroom_percent = if self.headroom_percent == 0 {
+            1
+        } else {
+            self.headroom_percent as u64
+        };
+        self.wire_bps(video_bps) * 100 / headroom_percent
     }
 }
 
@@ -92,6 +114,8 @@ pub struct Controller {
     window: Option<Window>,
     first_traffic_ms: Option<u64>,
     last_pressure_ms: Option<u64>,
+    /// The last pressure was no usable link at all.
+    last_pressure_was_outage: bool,
     last_increase_ms: Option<u64>,
 }
 
@@ -105,6 +129,7 @@ impl Controller {
             window: None,
             first_traffic_ms: None,
             last_pressure_ms: None,
+            last_pressure_was_outage: false,
             last_increase_ms: None,
         }
     }
@@ -144,6 +169,7 @@ impl Controller {
             window.overflow_bps * 100 > window.sent_bps * u64::from(s.overflow_percent);
         if window.no_usable_link || (!in_grace && (dropped || overflowed)) {
             self.last_pressure_ms = Some(now_ms);
+            self.last_pressure_was_outage = window.no_usable_link;
             let lower = if window.no_usable_link {
                 s.bounds.min_bps
             } else {
@@ -153,26 +179,25 @@ impl Controller {
             self.bitrate_bps = s.bounds.clamp(lower);
             return self.bitrate_bps;
         }
+        let calm_ms = if self.last_pressure_was_outage {
+            s.calm_after_outage_ms
+        } else {
+            s.calm_ms
+        };
         let calm = self
             .last_pressure_ms
-            .is_none_or(|at_ms| now_ms.saturating_sub(at_ms) >= s.calm_ms);
+            .is_none_or(|at_ms| now_ms.saturating_sub(at_ms) >= calm_ms);
         let may_increase = self
             .last_increase_ms
             .is_none_or(|at_ms| now_ms.saturating_sub(at_ms) >= s.increase_step_ms);
         if calm && may_increase && self.bitrate_bps < s.bounds.max_bps {
             let fitting_bps = self.fitting_bps(window.min_capacity_bps);
-            let percent = if fitting_bps > self.bitrate_bps {
-                s.fast_increase_percent
+            // Straight to what the links were measured to carry; past it, a little at a time.
+            let climbed = if fitting_bps > self.bitrate_bps {
+                fitting_bps
             } else {
-                s.increase_percent
-            };
-            let step = percent_of(self.bitrate_bps, percent).max(1);
-            let climbed = self.bitrate_bps.saturating_add(step);
-            // A fast step stops where the capacity says; probing goes past it.
-            let climbed = if percent == s.fast_increase_percent {
-                climbed.min(fitting_bps)
-            } else {
-                climbed
+                let step = percent_of(self.bitrate_bps, s.increase_percent).max(1);
+                self.bitrate_bps.saturating_add(step)
             };
             self.bitrate_bps = s.bounds.clamp(climbed);
             self.last_increase_ms = Some(now_ms);

@@ -7,10 +7,11 @@ use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::net::{Ipv4Addr, SocketAddrV4};
 
+use bitrate_control::CapacityReport;
 use bonding_receiver::freewheel::{
     GroupHandle, IoFailure as ReceiverIoFailure, Receiver, ReceiverIo,
 };
-use bonding_sender::freewheel::{IoFailure, LinkHandle, Sender, SenderIo};
+use bonding_sender::freewheel::{IoFailure, LinkHandle, ProbeTarget, Sender, SenderIo};
 
 /// Where the receiver listens.
 pub const RECEIVER: SocketAddrV4 = SocketAddrV4::new(Ipv4Addr::new(10, 200, 0, 1), 5_000);
@@ -18,6 +19,8 @@ const CALLER: SocketAddrV4 = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 7_001);
 /// Payload of one SRT data packet in the lab.
 pub const SRT_PACKET_BYTES: usize = 1_316;
 const TICK_US: u64 = 1_000;
+/// Capacity reports, once probing is on: as often as `freewheel-sender` sends them.
+const REPORT_PERIOD_US: u64 = 100_000;
 const BITS_PER_BYTE: u64 = 8;
 const MICROSECONDS_PER_SECOND: u64 = 1_000_000;
 
@@ -140,6 +143,9 @@ pub struct Network {
     next_order: u64,
     sent: u32,
     next_stream_us: u64,
+    /// Capacity reports taken every [`REPORT_PERIOD_US`] once probing is on, latest last.
+    reports: Option<Vec<CapacityReport>>,
+    next_report_us: u64,
 }
 
 fn source(link: usize) -> Ipv4Addr {
@@ -187,7 +193,25 @@ impl Network {
             next_order: 0,
             sent: 0,
             next_stream_us: 0,
+            reports: None,
+            next_report_us: 0,
         }
+    }
+
+    /// Turns the sender's capacity probing on, and takes a capacity report every 100 ms as
+    /// `freewheel-sender` does (probing learns the live traffic from them).
+    pub fn enable_probing(&mut self, target: ProbeTarget) {
+        self.sender.enable_probing(target);
+        self.reports = Some(Vec::new());
+        self.next_report_us = self.now_us;
+    }
+
+    /// The latest capacity report once probing is on (all zero before).
+    pub fn last_report(&self) -> CapacityReport {
+        self.reports
+            .as_ref()
+            .and_then(|reports| reports.last().copied())
+            .unwrap_or_default()
     }
 
     /// Runs for `duration_us`, the SRT caller sending `stream_bps` in 1316-byte packets.
@@ -226,6 +250,12 @@ impl Network {
                 self.next_stream_us = self.next_stream_us.saturating_add(interval_us);
             }
             self.now_us = tick_end_us;
+            if let Some(reports) = &mut self.reports
+                && self.now_us >= self.next_report_us
+            {
+                reports.push(self.sender.capacity_report(self.now_us));
+                self.next_report_us = self.now_us + REPORT_PERIOD_US;
+            }
             self.sender.housekeeping(self.now_us, &mut self.sender_side);
             self.receiver
                 .housekeeping(self.now_us, &mut self.receiver_side);

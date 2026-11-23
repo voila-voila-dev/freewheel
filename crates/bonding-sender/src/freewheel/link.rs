@@ -5,7 +5,9 @@ use std::net::Ipv4Addr;
 use bonding_protocol::freewheel::LinkId;
 
 use super::in_flight::InFlight;
+use super::limits::WINDOW_FULL_MEMORY_US;
 use super::link_estimate::LinkEstimate;
+use super::probe::LinkProbe;
 use crate::srtla::LinkHandle;
 
 /// One modem's link: its socket, its place in the session, and what we know of it.
@@ -27,6 +29,9 @@ pub struct Link {
     pub(crate) last_window_full_us: Option<u64>,
     pub(crate) estimate: LinkEstimate,
     pub(crate) in_flight: InFlight,
+    /// Data bytes ever sent on it, live and padding.
+    pub(crate) sent_bytes: u64,
+    pub(crate) probe: LinkProbe,
 }
 
 impl Link {
@@ -45,6 +50,26 @@ impl Link {
             last_window_full_us: None,
             estimate: LinkEstimate::new(),
             in_flight: InFlight::new(),
+            sent_bytes: 0,
+            probe: LinkProbe::default(),
+        }
+    }
+
+    /// The scheduler found its congestion window full within [`WINDOW_FULL_MEMORY_US`]: what
+    /// it delivers is what it can carry.
+    pub(crate) fn proven_full(&self, now_us: u64) -> bool {
+        self.last_window_full_us
+            .is_some_and(|at_us| now_us.saturating_sub(at_us) < WINDOW_FULL_MEMORY_US)
+    }
+
+    /// What it is estimated to carry, in bit/s: its delivery rate, or what probing measured if
+    /// more and the link has not been found full since.
+    pub(crate) fn capacity_bps(&self, now_us: u64) -> u64 {
+        let rate_bps = self.estimate.rate_bps();
+        if self.proven_full(now_us) {
+            rate_bps
+        } else {
+            rate_bps.max(self.probe.probed_bps(now_us))
         }
     }
 

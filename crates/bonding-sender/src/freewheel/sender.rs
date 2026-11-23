@@ -11,10 +11,10 @@ use bonding_protocol::freewheel::{
 use super::limits::{
     HOUSEKEEPING_PERIOD_US, JOIN_RETRY_US, KEEPALIVE_IDLE_US, MAX_EXPECTED_ARRIVAL_US,
     MAX_OVERFLOW_ARRIVAL_US, OPEN_RETRY_US, STALL_MAX_US, STALL_MIN_US, STALL_RTT_MULTIPLE,
-    WINDOW_FULL_MEMORY_US,
 };
 use super::link::Link;
 use super::link_estimate::wrapped_us;
+use super::probe::{PROBE_GAIN, ProbeTarget, Probing};
 use crate::srtla::{LinkHandle, SenderEvent, SenderIo};
 
 /// What the outside world may know about one link (for the event loop and tests).
@@ -52,6 +52,10 @@ pub struct Sender {
     /// Since the last [`capacity_report`](Self::capacity_report): live bytes sent, sent to
     /// arrive late (queuing), and dropped at the box.
     traffic: Traffic,
+    /// Capacity probing, once [`enable_probing`](Self::enable_probing) has been called.
+    probing: Option<Probing>,
+    /// Padding bytes sent so far.
+    padding_bytes: u64,
 }
 
 /// Live bytes counted since the last capacity report, and when that was.
@@ -82,7 +86,22 @@ impl Sender {
                 overflow_bytes: 0,
                 dropped_bytes: 0,
             },
+            probing: None,
+            padding_bytes: 0,
         }
+    }
+
+    /// Probes the links' spare capacity with padding while the encoder is below its maximum
+    /// and the links are not known to carry what it needs (`probe.rs`). Needs the
+    /// [`capacity_report`](Self::capacity_report)s, which tell it the live traffic.
+    pub const fn enable_probing(&mut self, target: ProbeTarget) {
+        self.probing = Some(Probing::new(target));
+    }
+
+    /// Padding bytes sent so far, on every link.
+    #[must_use]
+    pub const fn padding_bytes(&self) -> u64 {
+        self.padding_bytes
     }
 
     /// Makes the link list match `sources`: a known address keeps its link, a new one gets
@@ -176,6 +195,7 @@ impl Sender {
         if !send_packet(io, link.handle, receiver, &packet) {
             stall(
                 link,
+                now_us,
                 io,
                 SenderEvent::SendFailed {
                     source: link.source,
@@ -187,6 +207,7 @@ impl Sender {
             link.last_ack_us = link.last_ack_us.max(now_us);
         }
         link.last_sent_us = now_us;
+        link.sent_bytes += size_bytes;
         link.in_flight
             .push(sequence, u16::try_from(size_bytes).unwrap_or(u16::MAX));
         self.traffic.sent_bytes += size_bytes;
@@ -196,7 +217,8 @@ impl Sender {
     }
 
     /// What the links carried since the last call, for the encoder's bitrate
-    /// (`bitrate-control`): the usable links' estimated rates, and the live data sent, sent to
+    /// (`bitrate-control`): what the usable links are estimated to carry (probing included),
+    /// and the live data sent, sent to
     /// arrive after [`QUEUING_ARRIVAL_US`] (queuing: a window full is not enough, the stream's
     /// bursts fill them on links with room to spare) and dropped, as rates over the period. The
     /// first call only starts the period.
@@ -206,7 +228,7 @@ impl Sender {
             .iter()
             .filter(|link| link.usable())
             .fold((0_u8, 0_u64), |(count, sum), link| {
-                (count.saturating_add(1), sum + link.estimate.rate_bps())
+                (count.saturating_add(1), sum + link.capacity_bps(now_us))
             });
         let traffic = core::mem::take(&mut self.traffic);
         self.traffic.since_us = Some(now_us);
@@ -220,6 +242,11 @@ impl Sender {
                 bytes * BITS_PER_BYTE * MICROSECONDS_PER_SECOND / period_us
             }
         };
+        if let Some(probing) = &mut self.probing
+            && period_us > 0
+        {
+            probing.on_live(rate(traffic.sent_bytes));
+        }
         CapacityReport {
             capacity_bps,
             sent_bps: rate(traffic.sent_bytes),
@@ -263,6 +290,11 @@ impl Sender {
                 }
                 let left_flight_bytes = link.in_flight.acknowledge(ack.timing.largest_sequence);
                 link.estimate.on_ack(now_us, ack.timing, left_flight_bytes);
+                link.probe.on_ack(
+                    now_us,
+                    ack.timing.largest_sequence,
+                    ack.timing.received_bytes,
+                );
                 link.last_ack_us = now_us;
             }
             Packet::Close { .. } => {
@@ -320,6 +352,7 @@ impl Sender {
             {
                 stall(
                     link,
+                    now_us,
                     io,
                     SenderEvent::LinkFailed {
                         source: link.source,
@@ -336,6 +369,106 @@ impl Sender {
                 }
             }
         }
+        self.probe(now_us, io);
+    }
+
+    /// Starts runs of padding on the links due for one, and paces the runs going on
+    /// (`probe.rs`).
+    fn probe(&mut self, now_us: u64, io: &mut impl SenderIo) {
+        let Some(mut probing) = self.probing else {
+            return;
+        };
+        let capacity_bps: u64 = self
+            .links
+            .iter()
+            .filter(|link| link.usable())
+            .map(|link| link.capacity_bps(now_us))
+            .sum();
+        probing.refill(now_us, capacity_bps);
+        let below_maximum = probing.below_maximum();
+        let wanted = probing.wanted(capacity_bps);
+        let wanted_capacity_bps = probing.target.wanted_capacity_bps;
+        let (session_id, receiver) = (self.session_id, self.receiver);
+        for link in &mut self.links {
+            link.probe.advance(now_us);
+            if !link.usable() {
+                continue;
+            }
+            if link.probe.run.is_none() {
+                // A link back from a stall is probed at the rate it had, whatever the others.
+                let returning = link.probe.known_bps.is_some();
+                if !below_maximum
+                    || !(wanted || returning)
+                    || !link.estimate.has_rtt()
+                    || link.proven_full(now_us)
+                    || !link.probe.due(now_us)
+                {
+                    continue;
+                }
+                let carried_bps = link.capacity_bps(now_us);
+                let target_bps = link
+                    .probe
+                    .known_bps
+                    .unwrap_or(0)
+                    .max(carried_bps * PROBE_GAIN)
+                    .min(wanted_capacity_bps);
+                if target_bps <= carried_bps {
+                    link.probe.known_bps = None;
+                    continue;
+                }
+                // The whole run or none: a run cut short measures less than the link carries.
+                let cost_bytes = Probing::run_cost_bytes(target_bps, carried_bps);
+                if probing.budget_bytes < cost_bytes {
+                    continue;
+                }
+                link.probe.start(now_us, target_bps, link.sent_bytes);
+            }
+            let Some(run) = link.probe.run else {
+                continue;
+            };
+            let window_bytes = link.estimate.congestion_window_bytes(run.target_bps);
+            while link.probe.owed_bytes(now_us, link.sent_bytes) >= PADDING_DATAGRAM_BYTES
+                && probing.budget_bytes >= PADDING_DATAGRAM_BYTES
+                && link.in_flight.bytes() + PADDING_DATAGRAM_BYTES <= window_bytes
+            {
+                let sequence = self.next_sequence;
+                let packet = Packet::Data(Data {
+                    header: Header {
+                        session_id,
+                        link_id: link.id,
+                    },
+                    class: TrafficClass::Background,
+                    sequence,
+                    sent_at_us: wrapped_us(now_us),
+                    payload: &PADDING,
+                });
+                if !send_packet(io, link.handle, receiver, &packet) {
+                    stall(
+                        link,
+                        now_us,
+                        io,
+                        SenderEvent::SendFailed {
+                            source: link.source,
+                        },
+                    );
+                    break;
+                }
+                self.next_sequence = sequence.wrapping_add(1);
+                link.probe.on_padding_sent(sequence);
+                if link.in_flight.is_empty() {
+                    link.last_ack_us = link.last_ack_us.max(now_us);
+                }
+                link.last_sent_us = now_us;
+                link.sent_bytes += PADDING_DATAGRAM_BYTES;
+                link.in_flight.push(
+                    sequence,
+                    u16::try_from(PADDING_DATAGRAM_BYTES).unwrap_or(u16::MAX),
+                );
+                probing.budget_bytes -= PADDING_DATAGRAM_BYTES;
+                self.padding_bytes += PADDING_DATAGRAM_BYTES;
+            }
+        }
+        self.probing = Some(probing);
     }
 
     /// The links, in the order they were added.
@@ -370,7 +503,7 @@ impl Sender {
     /// within their congestion window; when every link is full, the earliest anyway, unless
     /// even that one would deliver it after [`MAX_OVERFLOW_ARRIVAL_US`]: then none. A link
     /// that has not filled its window lately counts at least the average rate of the usable
-    /// links ([`WINDOW_FULL_MEMORY_US`]); one found full is remembered as such. Also says
+    /// links ([`WINDOW_FULL_MEMORY_US`](super::limits::WINDOW_FULL_MEMORY_US)); one found full is remembered as such. Also says
     /// when the packet should arrive, in microseconds from now.
     fn choose_link(&mut self, now_us: u64, size_bytes: u64) -> Option<(usize, u64)> {
         let (usable, rate_sum_bps) = self
@@ -387,9 +520,7 @@ impl Sender {
             if !link.usable() {
                 continue;
             }
-            let proven_full = link
-                .last_window_full_us
-                .is_some_and(|at_us| now_us.saturating_sub(at_us) < WINDOW_FULL_MEMORY_US);
+            let proven_full = link.proven_full(now_us);
             let rate_bps = if proven_full {
                 link.estimate.rate_bps()
             } else {
@@ -405,8 +536,10 @@ impl Sender {
             }
             let within =
                 in_flight_bytes + size_bytes <= link.estimate.congestion_window_bytes(rate_bps);
-            if !within {
+            // Padding fills a probed link's window on purpose: that says nothing of its capacity.
+            if !within && !link.probe.busy() {
                 link.last_window_full_us = Some(now_us);
+                link.probe.forget_probed();
             }
             if within && better(best_within) {
                 best_within = Some((index, arrival_us));
@@ -424,6 +557,9 @@ impl Sender {
 pub const QUEUING_ARRIVAL_US: u64 = 250_000;
 const BITS_PER_BYTE: u64 = 8;
 const MICROSECONDS_PER_SECOND: u64 = 1_000_000;
+/// One padding datagram: the largest the wire carries.
+const PADDING_DATAGRAM_BYTES: u64 = MAX_DATAGRAM_LEN as u64;
+static PADDING: [u8; MAX_DATA_PAYLOAD_LEN] = [0; MAX_DATA_PAYLOAD_LEN];
 
 fn accept(link: &mut Link, now_us: u64, io: &mut impl SenderIo) {
     if !link.joined || link.stalled {
@@ -436,7 +572,8 @@ fn accept(link: &mut Link, now_us: u64, io: &mut impl SenderIo) {
     link.last_ack_us = now_us;
 }
 
-fn stall(link: &mut Link, io: &mut impl SenderIo, event: SenderEvent) {
+fn stall(link: &mut Link, now_us: u64, io: &mut impl SenderIo, event: SenderEvent) {
+    link.probe.on_stall(link.capacity_bps(now_us));
     link.stalled = true;
     link.in_flight.clear();
     link.estimate.on_stall();

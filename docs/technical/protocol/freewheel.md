@@ -186,6 +186,41 @@ repair them within its 2 s. Upstream loses 1 frame that way on `real-ride`, irls
 Hence no FEC: it repairs isolated losses, there are none left, and it would spend capacity that is
 missing exactly when frames are lost. Next is step 5, the encoder's bitrate following the links.
 
+## Cross-layer bitrate and capacity probing (M1b step 5)
+
+`freewheel-sender` reports what the links carry every 100 ms (`bitrate_control::CapacityReport`,
+JSON on a Unix socket); the lab's encoder (`lab-encoder`) follows `bitrate_control::Controller`:
+under pressure (1 % dropped at the box, or 20 % queuing), down to 80 % of the capacity and by
+at least a fifth; once calm (2 s, or 0.5 s after an outage of every link), straight to what the
+measured capacity carries with that headroom, then +5 % every 500 ms beyond it.
+
+A link only measures what it is given: once the encoder is low, the links report that bitrate,
+and the controller has nothing to climb back to (step 5's first CI run: 18 s from 0.3 to 2 Mbit/s
+after `all-links-drop`, at +5–15 % a step). So the sender probes (`bonding_sender::freewheel`,
+`probe.rs`):
+
+- **When**: the encoder is below 90 % of its ceiling (median live traffic of the last second)
+  and the usable links are not known to carry what the ceiling needs with the controller's
+  headroom (`ControllerSettings::capacity_for_bps`: 4.46 Mbit/s for the lab's 3 Mbit/s video
+  and 128 kbit/s audio). The ceiling comes from `FREEWHEEL_MAX_VIDEO_BPS` and
+  `FREEWHEEL_AUDIO_BPS`; without them, no probing.
+- **How**: on a link with spare room (not found full by the scheduler within 1 s), a 150 ms run
+  of padding (data of the background class, 1 500-byte datagrams, acknowledged and dropped by
+  the receiver) tops the link's traffic up to twice what it is known to carry, within the
+  congestion window of that rate. The run's delivery rate is the receiver's byte count between
+  the first ACK of its padding and the later ones (at least 50 ms apart). At most one run per
+  link per second.
+- **What it gives**: a probed rate, counted in the link's capacity for 10 s or until the
+  scheduler finds the link full (then what it delivers is the measure). The scheduler itself
+  still splits by delivery rate.
+- **After a stall**, a link that comes back is probed at once at the rate it had.
+- **Budget**: padding is at most 10 % of the estimated capacity on average (a bucket earning
+  10 %, two seconds deep, kept through an outage), and a run starts only when the bucket holds
+  all of it: a run cut short would measure less than the link carries.
+
+Padding is the stand-in for the recording upload (step 6): the same class, the same spare
+capacity, then doing useful work.
+
 ## Alternative to evaluate
 
 Multipath QUIC with datagrams (IETF draft): a standard, but a large dependency and less control over media-aware scheduling.
@@ -197,7 +232,7 @@ Same recorded traces and emulated links for every candidate, against SRTLA + SRT
 | Metric | Target |
 |---|---|
 | Frames lost or late (live) | lower than baseline |
-| Average delivered bitrate | higher than baseline |
+| Intact video bitrate (frames that arrived with the encoder's bytes) | at least the baseline's |
 | Glass-to-glass latency, p50 / p99 | equal or lower |
 | Recovery after a link dies | faster |
 | Recording delivered after an outage | 100 % |

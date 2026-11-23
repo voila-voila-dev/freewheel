@@ -223,6 +223,12 @@ impl Receiver {
             let link = *link;
             send_ack(io, data.header.session_id, &link, now_us);
         }
+        // Background data is counted and acknowledged, so the sender measures the link, but
+        // goes nowhere yet: the sender's capacity probing pads with it (the recording upload,
+        // M1b step 6, will use the same class).
+        if data.class == TrafficClass::Background {
+            return;
+        }
         let Some(session) = self.sessions.get_mut(index) else {
             return;
         };

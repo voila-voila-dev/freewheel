@@ -3,20 +3,25 @@
 //!
 //! With `FREEWHEEL_CAPACITY_SOCKET=<path>` in its environment, it also sends a capacity report
 //! (`bitrate_control::CapacityReport`, JSON) to that Unix datagram socket every 100 ms, for
-//! the encoder's bitrate.
+//! the encoder's bitrate. With `FREEWHEEL_MAX_VIDEO_BPS` (the encoder's ceiling) and
+//! `FREEWHEEL_AUDIO_BPS` too, it probes the links' spare capacity while the encoder is below
+//! its ceiling (`bonding_sender::freewheel::ProbeTarget`).
 
 use std::net::{Ipv4Addr, UdpSocket};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::atomic::AtomicBool;
 
-use bonding_sender::freewheel::Sender;
+use bitrate_control::ControllerSettings;
+use bonding_sender::freewheel::{ProbeTarget, Sender};
 use bonding_sender::server::{
     CapacityOutput, FREEWHEEL_WAKE_INTERVAL, SenderConfig, UdpIo, random_session_id,
     read_source_list, serve_freewheel,
 };
 
 const CAPACITY_SOCKET_VARIABLE: &str = "FREEWHEEL_CAPACITY_SOCKET";
+const MAX_VIDEO_VARIABLE: &str = "FREEWHEEL_MAX_VIDEO_BPS";
+const AUDIO_VARIABLE: &str = "FREEWHEEL_AUDIO_BPS";
 
 fn main() -> ExitCode {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
@@ -65,12 +70,19 @@ fn run(arguments: &[String]) -> Result<(), String> {
         .map(CapacityOutput::new)
         .transpose()
         .map_err(|error| format!("cannot open a Unix socket: {error}"))?;
+    let probe_target = probe_target()?.filter(|_| capacity.is_some());
+    if let Some(target) = probe_target {
+        sender.enable_probing(target);
+    }
     eprintln!(
-        "freewheel-sender: SRT on port {}, receiver at {receiver}{}",
+        "freewheel-sender: SRT on port {}, receiver at {receiver}{}{}",
         config.listen_port,
         capacity_path
             .as_deref()
             .map(|path| format!(", capacity to {}", path.display()))
+            .unwrap_or_default(),
+        probe_target
+            .map(|target| format!(", probing up to {} bit/s", target.wanted_capacity_bps))
             .unwrap_or_default()
     );
     serve_freewheel(
@@ -83,4 +95,30 @@ fn run(arguments: &[String]) -> Result<(), String> {
         capacity.as_ref(),
     )
     .map_err(|error| format!("freewheel-sender stopped: {error}"))
+}
+
+/// What the encoder's ceiling needs, from `FREEWHEEL_MAX_VIDEO_BPS` and `FREEWHEEL_AUDIO_BPS`
+/// (both, or none: no probing; empty counts as none), as the encoder's controller counts it.
+fn probe_target() -> Result<Option<ProbeTarget>, String> {
+    let read = |name: &str| {
+        std::env::var(name)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| {
+                value
+                    .trim()
+                    .parse::<u32>()
+                    .map_err(|_| format!("{name}={value}: not a bitrate in bit/s"))
+            })
+            .transpose()
+    };
+    let (Some(max_video_bps), Some(audio_bps)) = (read(MAX_VIDEO_VARIABLE)?, read(AUDIO_VARIABLE)?)
+    else {
+        return Ok(None);
+    };
+    let settings = ControllerSettings::lab(max_video_bps, audio_bps);
+    Ok(Some(ProbeTarget {
+        stream_max_wire_bps: settings.wire_bps(max_video_bps),
+        wanted_capacity_bps: settings.capacity_for_bps(max_video_bps),
+    }))
 }

@@ -98,14 +98,22 @@ write_sender_ips() {
 	for k in "$@"; do link_ip "$k" >> "/tmp/srtla_ips.$sender"; done
 }
 
-# start_sender <sender> <k…>: the sender on the given links; its exit is marked.
+# start_sender <sender> <k…>: the sender on the given links; its exit is marked. With the
+# adaptive encoder, freewheel-sender also probes the links' spare capacity up to what the
+# encoder's ceiling ($BITRATE) needs.
 start_sender() {
 	local sender=$1
 	shift
 	write_sender_ips "$sender" "$@"
+	local max_video_bps="" audio_bps=""
+	if [ "$ENCODER" = adaptive ]; then
+		max_video_bps=$(bitrate_bps "$BITRATE")
+		audio_bps=$AUDIO_BPS
+	fi
 	(
 		status=0
 		FREEWHEEL_CAPACITY_SOCKET="$CAPACITY_SOCKET_PREFIX.$sender.sock" \
+			FREEWHEEL_MAX_VIDEO_BPS="$max_video_bps" FREEWHEEL_AUDIO_BPS="$audio_bps" \
 			in_box "$SENDER_PROGRAM" "$((6000 + sender))" "$RECEIVER_IP" "$SRTLA_PORT" "/tmp/srtla_ips.$sender" \
 			>> "$OUT/$SCENARIO.sender.$sender.log" 2>&1 || status=$?
 		mark "sender $sender exited with $status"

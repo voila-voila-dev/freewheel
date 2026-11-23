@@ -1,4 +1,5 @@
-//! The bitrate follows the links: down fast under pressure, up slowly once calm.
+//! The bitrate follows the links: down fast under pressure, back up to the measured capacity
+//! once calm, slowly beyond it.
 
 use bitrate_control::{CapacityReport, Controller, ControllerSettings};
 
@@ -107,21 +108,47 @@ fn no_usable_link_goes_to_the_minimum_even_at_start() {
 }
 
 #[test]
-fn climbs_back_fast_while_the_capacity_fits_more() {
+fn climbs_straight_to_what_the_capacity_fits_once_calm() {
     let mut controller = started();
     let low = feed(&mut controller, 4_000, 4_600, strained(500_000));
-    let mut now_ms = 4_600;
-    while controller.bitrate_bps() < MAX_BPS {
-        let before = controller.bitrate_bps();
-        let bps = controller.on_report(now_ms, &calm(10_000_000));
-        assert!(bps <= before + before * 15 / 100 + 1);
-        now_ms += 100;
-    }
-    // From 0.3 to 3 Mbit/s at 15 % a window (~600 ms with reports every 100 ms), after 2 s of
-    // calm: about 12 s.
-    assert!(
-        low < 400_000 && (8_000..18_000).contains(&now_ms),
-        "{low} {now_ms}"
+    assert!(low < 400_000, "{low}");
+    // 2 s of calm, then one step to what 2.5 Mbit/s carries: 2.5 × 80 % / 1.14 − 128 kbit/s.
+    assert!(feed(&mut controller, 4_600, 6_500, calm(2_500_000)) < 400_000);
+    let bps = feed(&mut controller, 6_500, 7_200, calm(2_500_000));
+    assert!((1_550_000..=1_650_000).contains(&bps), "{bps}");
+    assert_eq!(
+        feed(&mut controller, 7_200, 8_000, calm(10_000_000)),
+        MAX_BPS
+    );
+}
+
+#[test]
+fn after_an_outage_climbs_back_within_a_second_of_the_links_returning() {
+    let mut controller = started();
+    let outage = CapacityReport {
+        usable_links: 0,
+        ..calm(0)
+    };
+    assert_eq!(feed(&mut controller, 4_000, 10_000, outage), 300_000);
+    // The links come back at the capacity they had; 0.5 s of calm, then straight to it.
+    assert_eq!(
+        feed(&mut controller, 10_000, 11_200, calm(10_000_000)),
+        MAX_BPS
+    );
+}
+
+#[test]
+fn needs_the_capacity_its_maximum_fits_in_with_headroom() {
+    let settings = ControllerSettings::lab(MAX_BPS, 128_000);
+    // (3 Mbit/s + 128 kbit/s) × 1.14 on the wire...
+    assert_eq!(settings.wire_bps(MAX_BPS), 3_565_920);
+    // ...in 80 % of the capacity.
+    assert_eq!(settings.capacity_for_bps(MAX_BPS), 4_457_400);
+    let mut controller = started();
+    feed(&mut controller, 4_000, 4_600, strained(500_000));
+    assert_eq!(
+        feed(&mut controller, 4_600, 8_000, calm(4_457_400)),
+        MAX_BPS
     );
 }
 
