@@ -14,9 +14,11 @@ use super::limits::{
 };
 use super::link::Link;
 use super::link_estimate::wrapped_us;
+use super::live_activity::LiveActivity;
 use super::probe::{PROBE_GAIN, ProbeTarget, Probing};
 use super::recording_settings::RecordingSettings;
 use super::recording_upload::RecordingUpload;
+use super::spare_window::SpareWindowSettings;
 use crate::srtla::{LinkHandle, SenderEvent, SenderIo};
 
 /// What the outside world may know about one link (for the event loop and tests).
@@ -63,6 +65,15 @@ pub struct Sender {
     /// What the logs were told of the upload: it ended, it finished (delivered or abandoned).
     recording_ended_reported: bool,
     recording_finished_reported: bool,
+    /// The upload's share of a link's spare room, in per cent, and the queue beyond which it
+    /// sends nothing there, in microseconds ([`RecordingSettings`]).
+    spare_share_percent: u64,
+    spare_queue_target_us: u64,
+    spare_base_rtt_window_us: u64,
+    spare_gain_bytes: u64,
+    spare_idle_live_bps: u64,
+    /// The live traffic of the last second, for the upload's queue target.
+    live_activity: LiveActivity,
 }
 
 /// Live bytes counted since the last capacity report, and when that was.
@@ -98,14 +109,27 @@ impl Sender {
             recording: None,
             recording_ended_reported: false,
             recording_finished_reported: false,
+            spare_share_percent: 0,
+            spare_queue_target_us: 0,
+            spare_base_rtt_window_us: 0,
+            spare_gain_bytes: 0,
+            spare_idle_live_bps: 0,
+            live_activity: LiveActivity::new(),
         }
     }
 
     /// Uploads the recording `io` reads ([`SenderIo::recording_bytes`],
-    /// [`SenderIo::read_recording`]) in the background class: its chunks take the place of
-    /// capacity probing's padding (`recording_upload.rs`).
+    /// [`SenderIo::read_recording`]) in the background class (`recording_upload.rs`): its
+    /// chunks take the place of capacity probing's padding, and fill the room the live
+    /// traffic leaves in each link's congestion window
+    /// ([`fill_spare_capacity`](Self::fill_spare_capacity)).
     pub fn enable_recording(&mut self, settings: &RecordingSettings) {
         self.recording = Some(RecordingUpload::new(settings));
+        self.spare_share_percent = settings.share_percent;
+        self.spare_queue_target_us = settings.queue_target_us;
+        self.spare_base_rtt_window_us = settings.base_rtt_window_us;
+        self.spare_gain_bytes = settings.window_gain_chunks * settings.chunk_bytes as u64;
+        self.spare_idle_live_bps = settings.idle_live_bps;
     }
 
     /// The recording upload, if enabled.
@@ -239,6 +263,7 @@ impl Sender {
         link.in_flight
             .push(sequence, u16::try_from(size_bytes).unwrap_or(u16::MAX));
         self.traffic.sent_bytes += size_bytes;
+        self.live_activity.on_sent(now_us, size_bytes);
         if arrival_us > QUEUING_ARRIVAL_US {
             self.traffic.overflow_bytes += size_bytes;
         }
@@ -316,6 +341,16 @@ impl Sender {
                     upload.on_acknowledged(ack.ranges.iter());
                     upload.on_link_acknowledged(ack.header.link_id, ack.timing.largest_sequence);
                 }
+                let base_rtt_window_us = self
+                    .recording
+                    .is_some()
+                    .then_some(self.spare_base_rtt_window_us);
+                let live_idle = self.live_activity.idle(now_us, self.spare_idle_live_bps);
+                let (spare_share_percent, queue_target_us, spare_gain_bytes) = (
+                    self.spare_share_percent,
+                    self.spare_queue_target_us,
+                    self.spare_gain_bytes,
+                );
                 let Some(link) = self.link_by_id(ack.header.link_id) else {
                     return;
                 };
@@ -330,6 +365,37 @@ impl Sender {
                     ack.timing.received_bytes,
                 );
                 link.last_ack_us = now_us;
+                let left_spare_bytes = link.in_flight.take_left_spare_bytes();
+                if let Some(window_us) = base_rtt_window_us {
+                    link.base_rtt
+                        .observe(now_us, link.estimate.smoothed_rtt_us(), window_us);
+                    if left_spare_bytes > 0 {
+                        let queue_us = link
+                            .base_rtt
+                            .queuing_delay_us(link.estimate.smoothed_rtt_us())
+                            .unwrap_or(0);
+                        let settings = SpareWindowSettings {
+                            queue_target_us: spare_queue_target_us(
+                                link,
+                                now_us,
+                                queue_target_us,
+                                live_idle,
+                            ),
+                            gain_bytes: spare_gain_bytes,
+                            min_bytes: MIN_SPARE_WINDOW_BYTES,
+                            max_bytes: spare_cap_bytes(link, now_us, spare_share_percent),
+                        };
+                        link.spare_window.on_acknowledged(
+                            now_us,
+                            left_spare_bytes,
+                            queue_us,
+                            link.estimate.smoothed_rtt_us(),
+                            &settings,
+                        );
+                    }
+                }
+                // The ACK freed room on that link: the upload's chunks are clocked by them.
+                self.fill_spare_capacity(now_us, io, Some(ack.header.link_id));
             }
             Packet::Close { .. } => {
                 if let Some(link) = self.links.iter_mut().find(|l| l.handle == link) {
@@ -409,6 +475,76 @@ impl Sender {
         }
         self.follow_recording(now_us, io);
         self.probe(now_us, io);
+        self.fill_spare_capacity(now_us, io, None);
+    }
+
+    /// Sends the recording's chunks on the links' spare room (`only_link`, or every link): on a
+    /// usable, measured link the live traffic has not found full lately, outside probe runs, the
+    /// upload's bytes in flight stay within the link's spare window (`spare_window.rs`: widened
+    /// by each ACK while the queue is under the target, narrowed beyond) and within the share of
+    /// what the live traffic leaves of the congestion window
+    /// ([`spare_cap_bytes`]). The live traffic does not count them
+    /// ([`InFlight::live_view_bytes`](super::InFlight::live_view_bytes)): they yield to it.
+    /// Never padding: spare room carries the recording or nothing.
+    fn fill_spare_capacity(&mut self, now_us: u64, io: &mut impl SenderIo, only_link: Option<u8>) {
+        let Some(upload) = &mut self.recording else {
+            return;
+        };
+        let (session_id, receiver) = (self.session_id, self.receiver);
+        let live_idle = self.live_activity.idle(now_us, self.spare_idle_live_bps);
+        for link in &mut self.links {
+            if only_link.is_some_and(|id| id != link.id)
+                || !link.usable()
+                || !link.estimate.has_rtt()
+                || link.probe.busy()
+                || link.proven_full(now_us)
+            {
+                continue;
+            }
+            let room_bytes = link.spare_window.bytes(&SpareWindowSettings {
+                queue_target_us: spare_queue_target_us(
+                    link,
+                    now_us,
+                    self.spare_queue_target_us,
+                    live_idle,
+                ),
+                gain_bytes: self.spare_gain_bytes,
+                min_bytes: MIN_SPARE_WINDOW_BYTES,
+                max_bytes: spare_cap_bytes(link, now_us, self.spare_share_percent),
+            });
+            while link.in_flight.spare_bytes() + PADDING_DATAGRAM_BYTES <= room_bytes {
+                let sequence = self.next_sequence;
+                let header = Header {
+                    session_id,
+                    link_id: link.id,
+                };
+                let sent =
+                    match send_chunk(io, link.handle, receiver, header, sequence, now_us, upload) {
+                        ChunkSent::Sent(sent) => sent,
+                        ChunkSent::NothingToSend => return,
+                        ChunkSent::Failed => {
+                            stall(
+                                link,
+                                now_us,
+                                io,
+                                SenderEvent::SendFailed {
+                                    source: link.source,
+                                },
+                                Some(upload),
+                            );
+                            break;
+                        }
+                    };
+                self.next_sequence = sequence.wrapping_add(1);
+                if link.in_flight.is_empty() {
+                    link.last_ack_us = link.last_ack_us.max(now_us);
+                }
+                link.last_sent_us = now_us;
+                link.sent_bytes += sent;
+                link.in_flight
+                    .push_spare(sequence, u16::try_from(sent).unwrap_or(u16::MAX));
+            }
+        }
     }
 
     /// Reads how long the recording is, finds lost chunks by their timeout, and tells the logs
@@ -605,7 +741,8 @@ impl Sender {
             } else {
                 link.estimate.rate_bps().max(average_rate_bps)
             };
-            let in_flight_bytes = link.in_flight.bytes();
+            // The recording's bytes on spare room yield to the live traffic: not counted here.
+            let in_flight_bytes = link.in_flight.live_view_bytes();
             let arrival_us =
                 link.estimate
                     .expected_arrival_us(in_flight_bytes, size_bytes, rate_bps);
@@ -635,6 +772,16 @@ impl Sender {
 /// the lab.
 pub const QUEUING_ARRIVAL_US: u64 = 250_000;
 const BITS_PER_BYTE: u64 = 8;
+const PERCENT: u64 = 100;
+/// The receiver acknowledges every this many data packets (`bonding_receiver::freewheel`'s
+/// `ACK_EVERY_PACKETS`): an RTT sample is the last of them, sent behind the others.
+const ACK_EVERY_PACKETS: u32 = 4;
+/// Jitter read as a queue: twice the RTT variation (most samples lie within it).
+const JITTER_ALLOWANCE: u64 = 2;
+/// The recording upload's smallest window on a link: two full datagrams, so it keeps the link
+/// measured however full its queue.
+const MIN_SPARE_WINDOW_BYTES: u64 = 2 * MAX_DATAGRAM_LEN as u64;
+
 const MICROSECONDS_PER_SECOND: u64 = 1_000_000;
 /// One padding datagram: the largest the wire carries.
 const PADDING_DATAGRAM_BYTES: u64 = MAX_DATAGRAM_LEN as u64;
@@ -649,6 +796,59 @@ fn accept(link: &mut Link, now_us: u64, io: &mut impl SenderIo) {
     link.joined = true;
     link.stalled = false;
     link.last_ack_us = now_us;
+}
+
+/// What sending a chunk of the recording came to.
+enum ChunkSent {
+    /// It left: its size on the wire, in bytes.
+    Sent(u64),
+    /// No chunk is ready, or it cannot be read.
+    NothingToSend,
+    /// The send failed.
+    Failed,
+}
+
+/// Sends the recording's next chunk as `sequence`, if one is ready and can be read.
+fn send_chunk(
+    io: &mut impl SenderIo,
+    link: LinkHandle,
+    receiver: SocketAddrV4,
+    header: Header,
+    sequence: u32,
+    now_us: u64,
+    upload: &mut RecordingUpload,
+) -> ChunkSent {
+    let mut bytes = [0u8; MAX_RECORDING_CHUNK_LEN];
+    let mut payload = [0u8; MAX_DATA_PAYLOAD_LEN];
+    let Some(chunk) = upload.next_chunk(now_us) else {
+        return ChunkSent::NothingToSend;
+    };
+    let Some(bytes) = bytes.get_mut(..chunk.len) else {
+        return ChunkSent::NothingToSend;
+    };
+    if io.read_recording(chunk.offset, bytes).is_err() {
+        return ChunkSent::NothingToSend;
+    }
+    let Ok(len) = BackgroundPayload::Chunk(RecordingChunk {
+        offset: chunk.offset,
+        bytes,
+    })
+    .encode(&mut payload) else {
+        return ChunkSent::NothingToSend;
+    };
+    let body = payload.get(..len).unwrap_or_default();
+    let packet = Packet::Data(Data {
+        header,
+        class: TrafficClass::Background,
+        sequence,
+        sent_at_us: wrapped_us(now_us),
+        payload: body,
+    });
+    if !send_packet(io, link, receiver, &packet) {
+        return ChunkSent::Failed;
+    }
+    upload.on_sent(chunk, sequence, header.link_id, now_us);
+    ChunkSent::Sent((DATA_HEADER_LEN + body.len()) as u64)
 }
 
 /// One background datagram that left: its size on the wire, and whether it was padding.
@@ -666,44 +866,53 @@ fn send_background(
     header: Header,
     sequence: u32,
     now_us: u64,
-    mut recording: Option<&mut RecordingUpload>,
+    recording: Option<&mut RecordingUpload>,
 ) -> Option<BackgroundSent> {
-    let mut bytes = [0u8; MAX_RECORDING_CHUNK_LEN];
-    let mut payload = [0u8; MAX_DATA_PAYLOAD_LEN];
-    let chunk = recording
-        .as_deref_mut()
-        .and_then(|upload| upload.next_chunk(now_us))
-        .and_then(|chunk| {
-            let bytes = bytes.get_mut(..chunk.len)?;
-            io.read_recording(chunk.offset, bytes).ok()?;
-            let len = BackgroundPayload::Chunk(RecordingChunk {
-                offset: chunk.offset,
-                bytes,
-            })
-            .encode(&mut payload)
-            .ok()?;
-            Some((chunk, len))
-        });
-    let body = chunk.map_or(&PADDING[..], |(_, len)| {
-        payload.get(..len).unwrap_or_default()
-    });
+    match recording.map(|upload| send_chunk(io, link, receiver, header, sequence, now_us, upload)) {
+        Some(ChunkSent::Sent(size_bytes)) => {
+            return Some(BackgroundSent {
+                size_bytes,
+                padding: false,
+            });
+        }
+        Some(ChunkSent::Failed) => return None,
+        Some(ChunkSent::NothingToSend) | None => {}
+    }
     let packet = Packet::Data(Data {
         header,
         class: TrafficClass::Background,
         sequence,
         sent_at_us: wrapped_us(now_us),
-        payload: body,
+        payload: &PADDING,
     });
-    if !send_packet(io, link, receiver, &packet) {
-        return None;
-    }
-    if let (Some(upload), Some((chunk, _))) = (recording, chunk) {
-        upload.on_sent(chunk, sequence, header.link_id, now_us);
-    }
-    Some(BackgroundSent {
-        size_bytes: (DATA_HEADER_LEN + body.len()) as u64,
-        padding: chunk.is_none(),
+    send_packet(io, link, receiver, &packet).then_some(BackgroundSent {
+        size_bytes: PADDING_DATAGRAM_BYTES,
+        padding: true,
     })
+}
+
+/// The queue the upload aims under on `link`: the queue target while the live stream runs;
+/// once it is idle (no live packet waits), also what the link's jitter and the time to send the
+/// packets one ACK covers read as a queue where there is none, so slow or jittery links fill.
+fn spare_queue_target_us(link: &Link, now_us: u64, queue_target_us: u64, live_idle: bool) -> u64 {
+    if !live_idle {
+        return queue_target_us;
+    }
+    let ack_burst_bits = u64::from(ACK_EVERY_PACKETS) * MAX_DATAGRAM_LEN as u64 * BITS_PER_BYTE;
+    let serialisation_us =
+        ack_burst_bits * MICROSECONDS_PER_SECOND / link.capacity_bps(now_us).max(1);
+    queue_target_us + serialisation_us + JITTER_ALLOWANCE * link.estimate.rtt_variation_us()
+}
+
+/// Most of the recording a link may have in flight on spare room: the share of what the live
+/// traffic leaves of its congestion window, at the capacity it is estimated to carry. The
+/// window is twice the bandwidth-delay product, so the upload can find more than the estimate
+/// (which only says what the link was given); the spare window keeps the queue short.
+fn spare_cap_bytes(link: &Link, now_us: u64, share_percent: u64) -> u64 {
+    let window_bytes = link
+        .estimate
+        .congestion_window_bytes(link.capacity_bps(now_us));
+    window_bytes.saturating_sub(link.in_flight.live_view_bytes()) * share_percent / PERCENT
 }
 
 fn stall(
@@ -717,6 +926,7 @@ fn stall(
         upload.on_link_lost(link.id);
     }
     link.probe.on_stall(link.capacity_bps(now_us));
+    link.spare_window.reset();
     link.stalled = true;
     link.in_flight.clear();
     link.estimate.on_stall();

@@ -4,9 +4,10 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use bonding_sender::freewheel::{
-    CHUNK_BYTES_VARIABLE, DEFAULT_CHUNK_BYTES, DRAIN_S_VARIABLE, END_IDLE_MS_VARIABLE,
-    IN_FLIGHT_CHUNKS_VARIABLE, LOSS_TIMEOUT_MS_VARIABLE, RECORDING_VARIABLE, RecordingSettings,
-    SHARE_PERCENT_VARIABLE, WINDOW_BYTES_VARIABLE,
+    BASE_RTT_WINDOW_S_VARIABLE, CHUNK_BYTES_VARIABLE, DEFAULT_CHUNK_BYTES, DRAIN_S_VARIABLE,
+    END_IDLE_MS_VARIABLE, IDLE_LIVE_BPS_VARIABLE, IN_FLIGHT_CHUNKS_VARIABLE,
+    LOSS_TIMEOUT_MS_VARIABLE, QUEUE_TARGET_MS_VARIABLE, RECORDING_VARIABLE, RecordingSettings,
+    SHARE_PERCENT_VARIABLE, WINDOW_BYTES_VARIABLE, WINDOW_GAIN_CHUNKS_VARIABLE,
 };
 
 fn read(variables: &[(&str, &str)]) -> Result<Option<RecordingSettings>, String> {
@@ -46,6 +47,10 @@ fn every_number_is_a_setting() {
         (RECORDING_VARIABLE, "/tmp/recording.bin"),
         (CHUNK_BYTES_VARIABLE, "1000"),
         (SHARE_PERCENT_VARIABLE, "75"),
+        (QUEUE_TARGET_MS_VARIABLE, "30"),
+        (BASE_RTT_WINDOW_S_VARIABLE, "5"),
+        (WINDOW_GAIN_CHUNKS_VARIABLE, "2"),
+        (IDLE_LIVE_BPS_VARIABLE, "50000"),
         (LOSS_TIMEOUT_MS_VARIABLE, "900"),
         (END_IDLE_MS_VARIABLE, "500"),
         (DRAIN_S_VARIABLE, "120"),
@@ -58,6 +63,10 @@ fn every_number_is_a_setting() {
             path: PathBuf::from("/tmp/recording.bin"),
             chunk_bytes: 1_000,
             share_percent: 75,
+            queue_target_us: 30_000,
+            base_rtt_window_us: 5_000_000,
+            window_gain_chunks: 2,
+            idle_live_bps: 50_000,
             loss_timeout_us: 900_000,
             end_idle_us: 500_000,
             drain_us: 120_000_000,
@@ -76,6 +85,10 @@ fn a_setting_out_of_range_is_refused_with_its_variable() {
         (SHARE_PERCENT_VARIABLE, "101"),
         (SHARE_PERCENT_VARIABLE, "half"),
         (LOSS_TIMEOUT_MS_VARIABLE, "0"),
+        (QUEUE_TARGET_MS_VARIABLE, "0"),
+        (BASE_RTT_WINDOW_S_VARIABLE, "0"),
+        (WINDOW_GAIN_CHUNKS_VARIABLE, "0"),
+        (IDLE_LIVE_BPS_VARIABLE, "lots"),
         (END_IDLE_MS_VARIABLE, "-1"),
         (DRAIN_S_VARIABLE, "1.5"),
         (WINDOW_BYTES_VARIABLE, "1000"),

@@ -5,17 +5,20 @@
 //! [`Sender`] decides; it reuses the SRTLA mode's [`SenderIo`] port (sockets, logs).
 //! Nothing allocates per packet.
 
+mod base_rtt;
 mod chunk_window;
 mod chunks_in_flight;
 mod in_flight;
 mod limits;
 mod link;
 mod link_estimate;
+mod live_activity;
 mod probe;
 mod recording_settings;
 mod recording_upload;
 mod sender;
 mod setting_error;
+mod spare_window;
 
 pub use in_flight::InFlight;
 pub use limits::{
@@ -29,10 +32,13 @@ pub use probe::{
     PROBE_INTERVAL_US, PROBE_MIN_SAMPLE_US, PROBE_SETTLE_US, PROBED_RATE_MEMORY_US, ProbeTarget,
 };
 pub use recording_settings::{
-    CHUNK_BYTES_VARIABLE, DEFAULT_CHUNK_BYTES, DEFAULT_DRAIN_US, DEFAULT_END_IDLE_US,
-    DEFAULT_IN_FLIGHT_CHUNKS, DEFAULT_LOSS_TIMEOUT_US, DEFAULT_SHARE_PERCENT, DEFAULT_WINDOW_BYTES,
-    DRAIN_S_VARIABLE, END_IDLE_MS_VARIABLE, IN_FLIGHT_CHUNKS_VARIABLE, LOSS_TIMEOUT_MS_VARIABLE,
-    RECORDING_VARIABLE, RecordingSettings, SHARE_PERCENT_VARIABLE, WINDOW_BYTES_VARIABLE,
+    BASE_RTT_WINDOW_S_VARIABLE, CHUNK_BYTES_VARIABLE, DEFAULT_BASE_RTT_WINDOW_US,
+    DEFAULT_CHUNK_BYTES, DEFAULT_DRAIN_US, DEFAULT_END_IDLE_US, DEFAULT_IDLE_LIVE_BPS,
+    DEFAULT_IN_FLIGHT_CHUNKS, DEFAULT_LOSS_TIMEOUT_US, DEFAULT_QUEUE_TARGET_US,
+    DEFAULT_SHARE_PERCENT, DEFAULT_WINDOW_BYTES, DEFAULT_WINDOW_GAIN_CHUNKS, DRAIN_S_VARIABLE,
+    END_IDLE_MS_VARIABLE, IDLE_LIVE_BPS_VARIABLE, IN_FLIGHT_CHUNKS_VARIABLE,
+    LOSS_TIMEOUT_MS_VARIABLE, QUEUE_TARGET_MS_VARIABLE, RECORDING_VARIABLE, RecordingSettings,
+    SHARE_PERCENT_VARIABLE, WINDOW_BYTES_VARIABLE, WINDOW_GAIN_CHUNKS_VARIABLE,
 };
 pub use recording_upload::{ChunkToSend, RecordingUpload};
 pub use sender::{FreewheelLinkStatus, QUEUING_ARRIVAL_US, Sender};

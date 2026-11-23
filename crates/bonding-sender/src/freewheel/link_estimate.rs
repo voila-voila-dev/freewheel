@@ -10,6 +10,8 @@ const MICROSECONDS_PER_SECOND: u64 = 1_000_000;
 const BITS_PER_BYTE: u64 = 8;
 /// Smoothed RTT keeps 7/8 of its value per sample (RFC 6298's gain).
 const RTT_KEEP_EIGHTHS: u64 = 7;
+/// The RTT variation keeps 3/4 of its value per sample (RFC 6298's gain).
+const RTT_VARIATION_KEEP_QUARTERS: u64 = 3;
 /// An RTT sample over this is a clock or echo error, not a measure.
 const MAX_PLAUSIBLE_RTT_US: u64 = 10_000_000;
 /// Loss is in thousandths; a new sample weighs a quarter.
@@ -25,6 +27,8 @@ const WINDOW_GAIN: u64 = 2;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinkEstimate {
     smoothed_rtt_us: Option<u64>,
+    /// How far samples stray from the smoothed RTT, smoothed (RFC 6298's RTTVAR).
+    rtt_variation_us: u64,
     min_rtt_us: Option<u64>,
     /// Start of the current rate sample: time and the receiver's byte count then.
     anchor: Option<(u64, u32)>,
@@ -47,6 +51,7 @@ impl LinkEstimate {
     pub const fn new() -> Self {
         Self {
             smoothed_rtt_us: None,
+            rtt_variation_us: 0,
             min_rtt_us: None,
             anchor: None,
             left_flight_bytes: 0,
@@ -64,6 +69,11 @@ impl LinkEstimate {
                 .wrapping_sub(timing.ack_delay_us),
         );
         if rtt_us <= MAX_PLAUSIBLE_RTT_US {
+            if let Some(smoothed) = self.smoothed_rtt_us {
+                self.rtt_variation_us = (self.rtt_variation_us * RTT_VARIATION_KEEP_QUARTERS
+                    + smoothed.abs_diff(rtt_us))
+                    / (RTT_VARIATION_KEEP_QUARTERS + 1);
+            }
             self.smoothed_rtt_us = Some(self.smoothed_rtt_us.map_or(rtt_us, |smoothed| {
                 (smoothed * RTT_KEEP_EIGHTHS + rtt_us) / (RTT_KEEP_EIGHTHS + 1)
             }));
@@ -107,6 +117,13 @@ impl LinkEstimate {
     #[must_use]
     pub fn smoothed_rtt_us(&self) -> u64 {
         self.smoothed_rtt_us.unwrap_or(INITIAL_RTT_US)
+    }
+
+    /// How far RTT samples stray from the smoothed RTT, smoothed (RFC 6298's RTTVAR), in
+    /// microseconds: the link's jitter.
+    #[must_use]
+    pub const fn rtt_variation_us(&self) -> u64 {
+        self.rtt_variation_us
     }
 
     /// Whether an RTT has been measured since the link joined or stalled.

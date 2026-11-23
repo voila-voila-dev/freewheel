@@ -14,6 +14,14 @@ pub const RECORDING_VARIABLE: &str = "FREEWHEEL_RECORDING";
 pub const CHUNK_BYTES_VARIABLE: &str = "FREEWHEEL_RECORDING_CHUNK_BYTES";
 /// [`RecordingSettings::share_percent`].
 pub const SHARE_PERCENT_VARIABLE: &str = "FREEWHEEL_RECORDING_SHARE_PERCENT";
+/// [`RecordingSettings::queue_target_us`], in milliseconds.
+pub const QUEUE_TARGET_MS_VARIABLE: &str = "FREEWHEEL_RECORDING_QUEUE_TARGET_MS";
+/// [`RecordingSettings::base_rtt_window_us`], in seconds.
+pub const BASE_RTT_WINDOW_S_VARIABLE: &str = "FREEWHEEL_RECORDING_BASE_RTT_WINDOW_S";
+/// [`RecordingSettings::window_gain_chunks`].
+pub const WINDOW_GAIN_CHUNKS_VARIABLE: &str = "FREEWHEEL_RECORDING_WINDOW_GAIN_CHUNKS";
+/// [`RecordingSettings::idle_live_bps`].
+pub const IDLE_LIVE_BPS_VARIABLE: &str = "FREEWHEEL_RECORDING_IDLE_LIVE_BPS";
 /// [`RecordingSettings::loss_timeout_us`], in milliseconds.
 pub const LOSS_TIMEOUT_MS_VARIABLE: &str = "FREEWHEEL_RECORDING_LOSS_TIMEOUT_MS";
 /// [`RecordingSettings::end_idle_us`], in milliseconds.
@@ -27,9 +35,23 @@ pub const IN_FLIGHT_CHUNKS_VARIABLE: &str = "FREEWHEEL_RECORDING_IN_FLIGHT_CHUNK
 
 /// Default [`RecordingSettings::chunk_bytes`]: the most one datagram carries.
 pub const DEFAULT_CHUNK_BYTES: usize = MAX_RECORDING_CHUNK_LEN;
-/// Default [`RecordingSettings::share_percent`]: half, to start conservative (the plan's
-/// "start conservative, then open up while the bench shows no harm to live").
-pub const DEFAULT_SHARE_PERCENT: u64 = 50;
+/// Default [`RecordingSettings::share_percent`]: all of it. The congestion window is twice the
+/// bandwidth-delay product, so this leaves the upload room to find more than the links are
+/// estimated to carry; what keeps the live stream from waiting is the queue target.
+pub const DEFAULT_SHARE_PERCENT: u64 = 100;
+/// Default [`RecordingSettings::queue_target_us`]: what the live stream's packets may wait
+/// behind the upload. On the simulated network (two 2 Mbit/s links nearly full of live, or two
+/// 8 Mbit/s links), 10 ms kept the live p99 within 5 ms of no upload, 30 ms cost it 20–40 ms.
+pub const DEFAULT_QUEUE_TARGET_US: u64 = 10_000;
+/// Default [`RecordingSettings::base_rtt_window_us`]: long enough for the upload to back off
+/// and the queue to drain within it, short enough to follow a handover to a longer path.
+pub const DEFAULT_BASE_RTT_WINDOW_US: u64 = 10_000_000;
+/// Default [`RecordingSettings::window_gain_chunks`]: from two chunks to a 8 Mbit/s link's
+/// bandwidth-delay product at 60 ms (40 chunks) in ten RTTs after a backoff.
+pub const DEFAULT_WINDOW_GAIN_CHUNKS: u64 = 4;
+/// Default [`RecordingSettings::idle_live_bps`]: above what SRT's control packets weigh without
+/// a stream, far below any video.
+pub const DEFAULT_IDLE_LIVE_BPS: u64 = 100_000;
 /// Default [`RecordingSettings::loss_timeout_us`]: beyond the longest a link holds a packet
 /// before the sender calls it stalled (1 s), so a chunk is not resent while it may still arrive.
 pub const DEFAULT_LOSS_TIMEOUT_US: u64 = 1_500_000;
@@ -58,9 +80,28 @@ pub struct RecordingSettings {
     /// Recording bytes per datagram, from 1 to [`MAX_RECORDING_CHUNK_LEN`]
     /// ([`CHUNK_BYTES_VARIABLE`], default [`DEFAULT_CHUNK_BYTES`]).
     pub chunk_bytes: usize,
-    /// Most of a link's spare room the upload takes, in per cent of what the live traffic
-    /// leaves, from 1 to 100 ([`SHARE_PERCENT_VARIABLE`], default [`DEFAULT_SHARE_PERCENT`]).
+    /// Most of a link's congestion window the upload takes, in per cent of what the live
+    /// traffic leaves of it, from 1 to 100 ([`SHARE_PERCENT_VARIABLE`], default [`DEFAULT_SHARE_PERCENT`]).
     pub share_percent: u64,
+    /// The upload's room on a link shrinks in proportion as its queue grows (smoothed RTT
+    /// over its RTT without a queue), none left at this, in microseconds: the live stream's packets
+    /// wait behind what it queues
+    /// ([`QUEUE_TARGET_MS_VARIABLE`] in milliseconds, default [`DEFAULT_QUEUE_TARGET_US`]).
+    pub queue_target_us: u64,
+    /// A link's RTT without a queue is its lowest smoothed RTT over the last one to two windows
+    /// of this, in microseconds: the queue is the smoothed RTT over it, so jitter does not
+    /// read as a queue ([`BASE_RTT_WINDOW_S_VARIABLE`] in seconds, default
+    /// [`DEFAULT_BASE_RTT_WINDOW_US`]).
+    pub base_rtt_window_us: u64,
+    /// Out of slow start, a link's spare window grows by up to this many chunks per RTT while
+    /// its queue is under the target, and shrinks as fast beyond it, from 1
+    /// ([`WINDOW_GAIN_CHUNKS_VARIABLE`], default [`DEFAULT_WINDOW_GAIN_CHUNKS`]).
+    pub window_gain_chunks: u64,
+    /// The live stream is idle below this, in bit/s over the last second: then no live packet
+    /// waits in a link's queue, and the upload's queue target also allows the link's jitter and
+    /// the time to send what one ACK covers, so slow and jittery links fill up
+    /// ([`IDLE_LIVE_BPS_VARIABLE`], default [`DEFAULT_IDLE_LIVE_BPS`]).
+    pub idle_live_bps: u64,
     /// A chunk not acknowledged this long after it was sent is sent again, in microseconds
     /// ([`LOSS_TIMEOUT_MS_VARIABLE`] in milliseconds, default [`DEFAULT_LOSS_TIMEOUT_US`]).
     pub loss_timeout_us: u64,
@@ -88,6 +129,10 @@ impl RecordingSettings {
             path,
             chunk_bytes: DEFAULT_CHUNK_BYTES,
             share_percent: DEFAULT_SHARE_PERCENT,
+            queue_target_us: DEFAULT_QUEUE_TARGET_US,
+            base_rtt_window_us: DEFAULT_BASE_RTT_WINDOW_US,
+            window_gain_chunks: DEFAULT_WINDOW_GAIN_CHUNKS,
+            idle_live_bps: DEFAULT_IDLE_LIVE_BPS,
             loss_timeout_us: DEFAULT_LOSS_TIMEOUT_US,
             end_idle_us: DEFAULT_END_IDLE_US,
             drain_us: DEFAULT_DRAIN_US,
@@ -144,6 +189,31 @@ impl RecordingSettings {
             chunk_bytes: chunk_bytes.unwrap_or(defaults.chunk_bytes),
             share_percent: number(SHARE_PERCENT_VARIABLE, 1, PERCENT, "a whole per cent")?
                 .unwrap_or(defaults.share_percent),
+            queue_target_us: number(
+                QUEUE_TARGET_MS_VARIABLE,
+                1,
+                u64::MAX / MICROSECONDS_PER_MILLISECOND,
+                "milliseconds",
+            )?
+            .map_or(defaults.queue_target_us, |ms| {
+                ms * MICROSECONDS_PER_MILLISECOND
+            }),
+            base_rtt_window_us: number(
+                BASE_RTT_WINDOW_S_VARIABLE,
+                1,
+                u64::MAX / MICROSECONDS_PER_SECOND,
+                "a number of seconds",
+            )?
+            .map_or(defaults.base_rtt_window_us, |s| s * MICROSECONDS_PER_SECOND),
+            window_gain_chunks: number(
+                WINDOW_GAIN_CHUNKS_VARIABLE,
+                1,
+                u64::from(u32::MAX),
+                "a number of chunks",
+            )?
+            .unwrap_or(defaults.window_gain_chunks),
+            idle_live_bps: number(IDLE_LIVE_BPS_VARIABLE, 0, u64::MAX, "bit/s")?
+                .unwrap_or(defaults.idle_live_bps),
             loss_timeout_us: number(
                 LOSS_TIMEOUT_MS_VARIABLE,
                 1,

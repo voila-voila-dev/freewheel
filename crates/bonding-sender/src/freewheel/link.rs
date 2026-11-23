@@ -4,10 +4,12 @@ use std::net::Ipv4Addr;
 
 use bonding_protocol::freewheel::LinkId;
 
+use super::base_rtt::BaseRtt;
 use super::in_flight::InFlight;
 use super::limits::WINDOW_FULL_MEMORY_US;
 use super::link_estimate::LinkEstimate;
 use super::probe::LinkProbe;
+use super::spare_window::SpareWindow;
 use crate::srtla::LinkHandle;
 
 /// One modem's link: its socket, its place in the session, and what we know of it.
@@ -32,6 +34,10 @@ pub struct Link {
     /// Data bytes ever sent on it, live and padding.
     pub(crate) sent_bytes: u64,
     pub(crate) probe: LinkProbe,
+    /// Its RTT without a queue, for the recording upload's room.
+    pub(crate) base_rtt: BaseRtt,
+    /// The recording upload's window on it.
+    pub(crate) spare_window: SpareWindow,
 }
 
 impl Link {
@@ -52,6 +58,8 @@ impl Link {
             in_flight: InFlight::new(),
             sent_bytes: 0,
             probe: LinkProbe::default(),
+            base_rtt: BaseRtt::default(),
+            spare_window: SpareWindow::default(),
         }
     }
 
