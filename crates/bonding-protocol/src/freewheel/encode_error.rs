@@ -13,4 +13,6 @@ pub enum EncodeError {
         /// Its length, in bytes.
         len: usize,
     },
+    /// A recording chunk without bytes, which no receiver would read.
+    EmptyChunk,
 }

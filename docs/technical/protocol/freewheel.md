@@ -69,6 +69,28 @@ prove the M1 way (`tests/freewheel_*.rs`): round trips of random packets, exact 
 every input up to 2 bytes, every kind × class byte at every boundary length, 2 million random
 mutations in release. Benchmark `freewheel_decode` keeps the decode allocation-free.
 
+### Background payload
+
+Live and reliable payloads are opaque. A background payload (M1b step 6) starts with a kind byte
+of its own (`bonding_protocol::freewheel::BackgroundPayload`):
+
+| Kind | Name | Length | After the kind byte |
+|---|---|---|---|
+| `0x00` | Padding | 1 – 1 480 | zeros only: capacity probing's filler, nothing to keep |
+| `0x01` | Recording chunk | 10 – 1 480 | offset of the first byte in the recording (64 bits), then 1 – 1 471 bytes of it |
+
+The offset makes a resend idempotent: the server writes the bytes where they belong, whichever
+copy arrives. Step 5's padding (1 480 zero bytes) is already padding. Decoding is as strict as
+the packet's: an unknown kind, padding that is not all zero, a chunk without bytes or shorter
+than its header are refused, and the encoder refuses to write them. Same proofs
+(`tests/background_payload.rs`, `tests/background_fuzz.rs`): exact layouts, round trips,
+every input up to 2 bytes, every kind at every boundary length, 2 million mutations in release;
+benchmark `recording_chunk_decode` keeps it allocation-free.
+
+The packet layer still treats data payloads as opaque, so a receiver without a recording counts,
+acknowledges and drops background data as before, whatever it holds. With a recording, ACKs
+carry the ranges of the recording chunks received (below, "Recording upload").
+
 ## First candidate (M1b step 3)
 
 `freewheel-sender` and `freewheel-receiver` (crates `bonding-sender` and `bonding-receiver`,

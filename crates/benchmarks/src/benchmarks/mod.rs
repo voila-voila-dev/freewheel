@@ -3,6 +3,7 @@
 mod bitrate_clamp;
 mod freewheel_decode;
 mod receiver_forward;
+mod recording_chunk_decode;
 mod sender_forward;
 mod srtla_classify;
 mod srtla_decode;
@@ -14,6 +15,7 @@ pub const ALL: &[Benchmark] = &[
     srtla_classify::BENCHMARK,
     srtla_decode::BENCHMARK,
     freewheel_decode::BENCHMARK,
+    recording_chunk_decode::BENCHMARK,
     receiver_forward::BENCHMARK,
     sender_forward::BENCHMARK,
     bitrate_clamp::BENCHMARK,

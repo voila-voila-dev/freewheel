@@ -73,3 +73,22 @@ pub fn assert_canonical(bytes: &[u8]) {
         assert_eq!(encode(&packet), bytes, "{packet:?}");
     }
 }
+
+/// Encodes a background payload into a fresh buffer of exactly its length.
+pub fn encode_background(payload: &bonding_protocol::freewheel::BackgroundPayload<'_>) -> Vec<u8> {
+    let mut out = vec![0u8; payload.encoded_len()];
+    let Ok(len) = payload.encode(&mut out) else {
+        unreachable!("buffer sized from encoded_len, {payload:?}")
+    };
+    assert_eq!(len, out.len());
+    out
+}
+
+/// Asserts the core property on one background payload: if it decodes, it encodes back to
+/// itself.
+pub fn assert_background_canonical(bytes: &[u8]) {
+    if let Ok(payload) = bonding_protocol::freewheel::BackgroundPayload::decode(bytes) {
+        assert_eq!(payload.encoded_len(), bytes.len(), "{payload:?}");
+        assert_eq!(encode_background(&payload), bytes, "{payload:?}");
+    }
+}

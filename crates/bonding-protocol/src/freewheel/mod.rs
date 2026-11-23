@@ -2,9 +2,13 @@
 //! ("Wire format v0").
 //!
 //! [`Packet::decode`] reads any datagram, [`Packet::encode`] writes it back byte for byte;
-//! [`Ack::encode`] builds an acknowledgement from typed ranges. Nothing allocates.
+//! [`Ack::encode`] builds an acknowledgement from typed ranges; [`BackgroundPayload`] reads and
+//! writes what a background data packet carries (padding, or a chunk of the recording). Nothing
+//! allocates.
 
 mod ack;
+mod background_decode_error;
+mod background_payload;
 mod close_reason;
 mod data;
 mod decode_error;
@@ -15,10 +19,13 @@ mod link_timing;
 mod packet;
 mod packet_kind;
 mod read;
+mod recording_chunk;
 mod sequence_range;
 mod traffic_class;
 
 pub use ack::{Ack, SequenceRanges};
+pub use background_decode_error::BackgroundDecodeError;
+pub use background_payload::BackgroundPayload;
 pub use close_reason::CloseReason;
 pub use data::Data;
 pub use decode_error::DecodeError;
@@ -32,5 +39,6 @@ pub use lengths::{
 pub use link_timing::LinkTiming;
 pub use packet::{Packet, is_freewheel};
 pub use packet_kind::PacketKind;
+pub use recording_chunk::RecordingChunk;
 pub use sequence_range::SequenceRange;
 pub use traffic_class::TrafficClass;
