@@ -42,6 +42,23 @@ pub trait ReceiverIo {
     /// No randomness available: the REG1 is refused.
     fn fill_random(&mut self, bytes: &mut [u8]) -> Result<(), IoFailure>;
 
+    /// Keeps `bytes` of a session's recording at `offset` (the freewheel transport's
+    /// background class, M1b step 6), without holding up the live stream: a write that cannot
+    /// be taken now fails, and the sender sends the bytes again. Only called with a recording
+    /// enabled; the default keeps nothing.
+    ///
+    /// # Errors
+    /// The bytes were not taken (no room, no recording directory, the disk failed).
+    fn write_recording(
+        &mut self,
+        session_id: u64,
+        offset: u64,
+        bytes: &[u8],
+    ) -> Result<(), IoFailure> {
+        let _ = (session_id, offset, bytes);
+        Err(IoFailure)
+    }
+
     /// Something worth a log line happened. Never called per packet, except for failed sends.
     fn report(&mut self, event: ReceiverEvent) {
         let _ = event;

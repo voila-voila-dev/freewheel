@@ -3,11 +3,14 @@
 //! (`docs/technical/protocol/freewheel.md`, "First candidate").
 //!
 //! [`Receiver`] decides; it reuses the SRTLA mode's [`ReceiverIo`] port (sockets, logs), a
-//! session standing where SRTLA has a group. Nothing allocates per packet.
+//! session standing where SRTLA has a group. With a recording ([`Receiver::enable_recording`]),
+//! it keeps the chunks each session uploads in the background class, through
+//! [`ReceiverIo::write_recording`], and acknowledges them. Nothing allocates per packet.
 
 mod limits;
 mod link;
 mod receiver;
+mod recent_chunks;
 mod recording_settings;
 mod session;
 mod setting_error;

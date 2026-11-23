@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use bonding_protocol::freewheel::MAX_DATAGRAM_LEN;
 use net_sys::{ReadinessSlot, wait_until_readable};
 
-use crate::freewheel::{GroupHandle, MAX_SESSIONS, Receiver};
+use crate::freewheel::{GroupHandle, MAX_SESSIONS, Receiver, RecordingSettings};
 
 use super::udp_io::UdpIo;
 
@@ -18,7 +18,9 @@ use super::udp_io::UdpIo;
 pub const FREEWHEEL_WAKE_INTERVAL: Duration = Duration::from_millis(2);
 
 /// Serves the freewheel transport until `stop` is set. Same shape as the SRTLA loop
-/// ([`serve`](super::serve)), with a microsecond clock. Nothing allocates per packet.
+/// ([`serve`](super::serve)), with a microsecond clock. With `recording`, the recordings the
+/// sessions upload are kept (`io` must then write them: [`UdpIo::with_recording`]). Nothing
+/// allocates per packet.
 ///
 /// # Errors
 /// Waiting on the sockets failed, which only happens when the process is out of resources.
@@ -26,10 +28,14 @@ pub fn serve_freewheel(
     io: &mut UdpIo,
     wake_interval: Duration,
     stop: &AtomicBool,
+    recording: Option<&RecordingSettings>,
 ) -> io::Result<()> {
     let started = Instant::now();
     let now_us = || u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
     let mut receiver = Receiver::new();
+    if let Some(settings) = recording {
+        receiver.enable_recording(settings);
+    }
     let mut buffer = [0u8; MAX_DATAGRAM_LEN];
     let mut slots: Vec<ReadinessSlot> = Vec::with_capacity(1 + MAX_SESSIONS);
     let mut ready_sessions: Vec<GroupHandle> = Vec::with_capacity(MAX_SESSIONS);

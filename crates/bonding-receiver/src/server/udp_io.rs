@@ -7,6 +7,7 @@ use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket};
 use crate::srtla::{GroupHandle, IoFailure, MAX_GROUPS, ReceiverEvent, ReceiverIo};
 
 use super::log_line::log_line;
+use super::recording_writer::RecordingWriter;
 
 const RANDOMNESS_PATH: &str = "/dev/urandom";
 
@@ -17,6 +18,7 @@ pub struct UdpIo {
     srt_address: SocketAddrV4,
     srt_sockets: Vec<(GroupHandle, UdpSocket)>,
     randomness: Option<File>,
+    recording: Option<RecordingWriter>,
 }
 
 impl UdpIo {
@@ -28,7 +30,15 @@ impl UdpIo {
             srt_address,
             srt_sockets: Vec::with_capacity(MAX_GROUPS),
             randomness: File::open(RANDOMNESS_PATH).ok(),
+            recording: None,
         }
+    }
+
+    /// Keeps the recordings the sessions upload, through `writer`.
+    #[must_use]
+    pub fn with_recording(mut self, writer: RecordingWriter) -> Self {
+        self.recording = Some(writer);
+        self
     }
 
     /// The socket the senders' links reach.
@@ -84,6 +94,18 @@ impl ReceiverIo for UdpIo {
     fn fill_random(&mut self, bytes: &mut [u8]) -> Result<(), IoFailure> {
         let source = self.randomness.as_mut().ok_or(IoFailure)?;
         source.read_exact(bytes).map_err(|_| IoFailure)
+    }
+
+    fn write_recording(
+        &mut self,
+        session_id: u64,
+        offset: u64,
+        bytes: &[u8],
+    ) -> Result<(), IoFailure> {
+        self.recording
+            .as_ref()
+            .ok_or(IoFailure)?
+            .write(session_id, offset, bytes)
     }
 
     fn report(&mut self, event: ReceiverEvent) {

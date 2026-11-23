@@ -318,6 +318,17 @@ the binaries only:
 - The lab: `RECORDING`, `RECORDING_BPS`, `RECORDING_DRAIN_S` (`labs/srtla-capture/README.md`,
   "Recording upload").
 
+**Receiver.** With a recording (`Receiver::enable_recording`), each recording chunk goes to
+`ReceiverIo::write_recording`; the server's (`RecordingWriter`) copies it into a bounded queue,
+allocated once, and a thread of its own writes it at its offset in
+`<FREEWHEEL_RECORDING_DIR>/<session id>.recording` (never truncated). A full queue refuses the
+chunk at once: the live path never waits for the disk. A chunk taken is acknowledged by its
+sequence: every ACK of the session, on any link, carries the latest runs of chunk sequences
+taken (16 by default), so a lost ACK or a link dying right after costs no resend; a chunk
+refused is not, and the sender sends it again. Padding and malformed payloads are counted and
+dropped. Tests: `tests/freewheel_recording.rs` (out of order and repeated chunks rebuild the
+recording, ACK ranges, a full disk, no recording), `tests/freewheel_recording_zero_allocations.rs`.
+
 Off, both sides are step 5's to the bit: `tests/freewheel_recording_off.rs` digests every
 datagram either side sends, with its time and link, over a simulated run with probing, an outage
 of every link and SRT answers, and compares it with the digest of step 5's code.

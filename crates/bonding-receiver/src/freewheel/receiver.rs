@@ -3,7 +3,8 @@
 use std::net::SocketAddrV4;
 
 use bonding_protocol::freewheel::{
-    Ack, CloseReason, Data, Header, MAX_DATAGRAM_LEN, Packet, TrafficClass,
+    Ack, BackgroundPayload, CloseReason, Data, Header, MAX_DATAGRAM_LEN, Packet, SequenceRange,
+    TrafficClass,
 };
 
 use super::limits::{
@@ -11,6 +12,7 @@ use super::limits::{
     SESSION_TIMEOUT_US,
 };
 use super::link::Link;
+use super::recording_settings::{MAX_ACKNOWLEDGED_RANGES, RecordingSettings};
 use super::session::Session;
 use crate::srtla::{GroupHandle, GroupRemoval, ReceiverEvent, ReceiverIo, Refusal};
 
@@ -23,6 +25,8 @@ use crate::srtla::{GroupHandle, GroupRemoval, ReceiverEvent, ReceiverIo, Refusal
 pub struct Receiver {
     sessions: Vec<Session>,
     next_handle: u64,
+    /// With a recording: the ranges each ACK carries. Without, background data is dropped.
+    acknowledged_ranges: Option<usize>,
 }
 
 impl Default for Receiver {
@@ -38,7 +42,16 @@ impl Receiver {
         Self {
             sessions: Vec::with_capacity(MAX_SESSIONS),
             next_handle: 0,
+            acknowledged_ranges: None,
         }
+    }
+
+    /// Keeps the recording each session uploads (the background class): every chunk goes to
+    /// [`ReceiverIo::write_recording`], and the chunks taken are acknowledged by sequence in
+    /// every ACK of the session (`settings.acknowledged_ranges` of the latest). Without this,
+    /// background data is counted, acknowledged by link and dropped.
+    pub fn enable_recording(&mut self, settings: &RecordingSettings) {
+        self.acknowledged_ranges = Some(settings.acknowledged_ranges);
     }
 
     /// A datagram from a sender's link, on the listening socket.
@@ -58,11 +71,9 @@ impl Receiver {
                 };
                 link.latest_sent_at_us = sent_at_us;
                 link.latest_arrival_us = now_us;
+                link.unacknowledged_packets = 0;
                 let link = *link;
-                send_ack(io, header.session_id, &link, now_us);
-                if let Some(link) = self.find_link(header) {
-                    link.unacknowledged_packets = 0;
-                }
+                self.acknowledge(io, header.session_id, &link, now_us);
             }
             Ok(Packet::Close { header, .. }) => self.close_link(now_us, header),
             _ => {}
@@ -116,11 +127,13 @@ impl Receiver {
                 continue;
             };
             let (session_id, handle) = (session.id, session.handle);
+            let mut ranges = [SequenceRange::default(); MAX_ACKNOWLEDGED_RANGES];
+            let ranges = session.recent_chunks.copy_into(&mut ranges);
             for link in &mut session.links {
                 if link.unacknowledged_packets > 0
                     && now_us.saturating_sub(link.latest_arrival_us) >= ACK_MAX_DELAY_US
                 {
-                    send_ack(io, session_id, link, now_us);
+                    send_ack(io, session_id, link, ranges, now_us);
                     link.unacknowledged_packets = 0;
                 }
             }
@@ -169,8 +182,12 @@ impl Receiver {
             None => {
                 let handle = GroupHandle::new(self.next_handle);
                 self.next_handle += 1;
-                self.sessions
-                    .push(Session::new(header.session_id, handle, now_us));
+                self.sessions.push(Session::new(
+                    header.session_id,
+                    handle,
+                    now_us,
+                    self.acknowledged_ranges.unwrap_or(1),
+                ));
                 io.report(ReceiverEvent::GroupRegistered {
                     group: handle,
                     from,
@@ -218,14 +235,28 @@ impl Receiver {
             .received_bytes
             .wrapping_add(u32::try_from(datagram_len).unwrap_or(u32::MAX));
         link.unacknowledged_packets += 1;
-        if link.unacknowledged_packets >= ACK_EVERY_PACKETS {
+        let ack_due = link.unacknowledged_packets >= ACK_EVERY_PACKETS;
+        if ack_due {
             link.unacknowledged_packets = 0;
-            let link = *link;
-            send_ack(io, data.header.session_id, &link, now_us);
         }
-        // Background data is counted and acknowledged, so the sender measures the link, but
-        // goes nowhere yet: the sender's capacity probing pads with it (the recording upload,
-        // M1b step 6, will use the same class).
+        let link = *link;
+        // Background data is counted and acknowledged, so the sender measures the link. With a
+        // recording, its chunks are kept, and acknowledged by sequence once taken (before the
+        // ACK this packet may trigger); padding, and everything without a recording, goes
+        // nowhere.
+        if data.class == TrafficClass::Background
+            && self.acknowledged_ranges.is_some()
+            && let Ok(BackgroundPayload::Chunk(chunk)) = BackgroundPayload::decode(data.payload)
+            && io
+                .write_recording(data.header.session_id, chunk.offset, chunk.bytes)
+                .is_ok()
+            && let Some(session) = self.sessions.get_mut(index)
+        {
+            session.recent_chunks.record(data.sequence);
+        }
+        if ack_due {
+            self.acknowledge(io, data.header.session_id, &link, now_us);
+        }
         if data.class == TrafficClass::Background {
             return;
         }
@@ -278,11 +309,17 @@ impl Receiver {
         index.map(|index| (index, link))
     }
 
-    fn find_link(&mut self, header: Header) -> Option<&mut Link> {
-        self.sessions
-            .iter_mut()
-            .find(|session| session.id == header.session_id)
-            .and_then(|session| session.link_mut(header.link_id))
+    /// Sends `link` an ACK, with the session's latest recording chunks.
+    fn acknowledge(&self, io: &mut impl ReceiverIo, session_id: u64, link: &Link, now_us: u64) {
+        let mut ranges = [SequenceRange::default(); MAX_ACKNOWLEDGED_RANGES];
+        let ranges = self
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .map_or(&[][..], |session| {
+                session.recent_chunks.copy_into(&mut ranges)
+            });
+        send_ack(io, session_id, link, ranges, now_us);
     }
 
     fn close_link(&mut self, now_us: u64, header: Header) {
@@ -328,13 +365,19 @@ fn send_packet(io: &mut impl ReceiverIo, to: SocketAddrV4, packet: &Packet<'_>) 
     }
 }
 
-fn send_ack(io: &mut impl ReceiverIo, session_id: u64, link: &Link, now_us: u64) {
+fn send_ack(
+    io: &mut impl ReceiverIo,
+    session_id: u64,
+    link: &Link,
+    ranges: &[SequenceRange],
+    now_us: u64,
+) {
     let header = Header {
         session_id,
         link_id: link.id,
     };
     let mut out = [0u8; MAX_DATAGRAM_LEN];
-    let Some(datagram) = Ack::encode(header, link.timing(now_us), &[], &mut out)
+    let Some(datagram) = Ack::encode(header, link.timing(now_us), ranges, &mut out)
         .ok()
         .and_then(|len| out.get(..len))
     else {

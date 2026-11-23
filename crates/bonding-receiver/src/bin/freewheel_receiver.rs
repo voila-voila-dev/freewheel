@@ -11,7 +11,9 @@ use std::process::ExitCode;
 use std::sync::atomic::AtomicBool;
 
 use bonding_receiver::freewheel::RecordingSettings;
-use bonding_receiver::server::{FREEWHEEL_WAKE_INTERVAL, ServerConfig, UdpIo, serve_freewheel};
+use bonding_receiver::server::{
+    FREEWHEEL_WAKE_INTERVAL, RecordingWriter, ServerConfig, UdpIo, serve_freewheel,
+};
 
 fn main() -> ExitCode {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
@@ -51,7 +53,21 @@ fn main() -> ExitCode {
             .unwrap_or_default()
     );
     let mut io = UdpIo::new(listen, config.srt_address);
-    match serve_freewheel(&mut io, FREEWHEEL_WAKE_INTERVAL, &AtomicBool::new(false)) {
+    if let Some(settings) = &recording {
+        match RecordingWriter::start(settings) {
+            Ok(writer) => io = io.with_recording(writer),
+            Err(error) => {
+                eprintln!("cannot record in {}: {error}", settings.directory.display());
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    match serve_freewheel(
+        &mut io,
+        FREEWHEEL_WAKE_INTERVAL,
+        &AtomicBool::new(false),
+        recording.as_ref(),
+    ) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("freewheel-receiver stopped: {error}");
