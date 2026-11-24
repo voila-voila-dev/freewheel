@@ -183,6 +183,20 @@ CI: 2538, 186); `link-drop` 3035 kbit/s, 1 frame lost (3056); `receiver-restart`
 a 5.2 s gap, the same in clear (163, 5.3 s): the box opens the session again 3 s into the
 silence, while the server is back after 1.3 s.
 
+**CI run 45423144243** (3 runs, medians, encrypted, recording on), against step 6 (CI 45352392251)
+and the baseline: intact video `all-links-drop` 2538 kbit/s (2538; baseline 2434), `burst-loss`
+3083 (3084; 3042), `link-drop` 3056 (3056; 3028), `real-ride` 2946 (2952; 2963), `trace-city` 3043
+(3043; 3022), `trace-drive` 2183 (2182; 1092), `varying-bandwidth` 2918 (3046; 3024); frames lost
+186 / 0 / 0 / 18 / 0 / 166 / 0; latency p99 unchanged; the recording whole in every run of every
+scenario (2–144 s after the stream). The gate fails on `varying-bandwidth` alone: 2918 against
+3024 (runs 2990, 2918, 2890), the encoder backing off at both of link 2's drops where step 6 rode
+them out. Locally, 3 runs each: encrypted 2903–2972 (6–13 encoder changes), in clear 2969–3033
+(1–5); without the recording, encrypted and in clear alike (2967–3033, 2941–2976); in clear with
+1447-byte chunks (encryption's size), 2735–3011. So it is the upload with the smaller chunk, not the
+cryptography: step 6 rode the drops with 0.7 % to spare, and the upload's share of a link whose
+capacity drops at once is what tips it (`decisions.md`, 2026-11-24, `LIVE_RATIO_PERCENT`). Open:
+Emilien's call (`roadmap.md`).
+
 ## First candidate (M1b step 3)
 
 `freewheel-sender` and `freewheel-receiver` (crates `bonding-sender` and `bonding-receiver`,

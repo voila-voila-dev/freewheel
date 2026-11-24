@@ -972,7 +972,7 @@ fn send_chunk(
     let Some(chunk) = upload.next_chunk(now_us) else {
         return ChunkSent::NothingToSend;
     };
-    let Some(bytes) = bytes.get_mut(..chunk.len.min(wire.max_recording_chunk_len())) else {
+    let Some(bytes) = bytes.get_mut(..chunk.len) else {
         return ChunkSent::NothingToSend;
     };
     if io.read_recording(chunk.offset, bytes).is_err() {
