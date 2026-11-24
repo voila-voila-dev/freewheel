@@ -61,6 +61,11 @@ CI run 45081482940), and an encoder that lowers its bitrate to lose fewer frames
 bytes by design. Baseline's intact video on that run: 3022–3042 kbit/s on the scenarios that
 lose nothing, `real-ride` 2958, `all-links-drop` 2434, `trace-drive` 1077.
 
+Since M1b step 6 the table has a "Recording delivered" column (our transport only; the
+baseline has no recording, "–"): a 6 Mbit/s recording, `100 % in <s> s` after the stream ended
+when every run got it whole; the gate is absolute, 100 % on every scenario that recorded. CI run
+45352392251: 100 % everywhere, in 2 s (`all-links-drop`) to 138 s (`trace-drive`).
+
 Baseline of 2026-11-17 (CI run 44085568015, `e649d57`, median of 3 runs on the ARM64 runner):
 
 | Scenario | Sender → receiver | Frames lost or damaged | Longest gap | Delivered | Latency p50 / p99 |

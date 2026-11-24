@@ -383,6 +383,19 @@ Off, both sides are step 5's to the bit: `tests/freewheel_recording_off.rs` dige
 datagram either side sends, with its time and link, over a simulated run with probing, an outage
 of every link and SRT answers, and compares it with the digest of step 5's code.
 
+**Results.** CI run 45352392251 (3 runs, medians), with a 6 Mbit/s recording (twice the live
+ceiling) growing during every scenario: it arrives whole, byte for byte, in every run, after the
+stream ends in 2 s (`all-links-drop`, `burst-loss`), 3 s (`link-drop`), 21 s (`trace-city`), 24 s
+(`varying-bandwidth`), 73 s (`real-ride`) and 138 s (`trace-drive`, whose links carry 1–4 Mbit/s).
+The live stream holds step 5's level (CI 45194700354): intact video `all-links-drop` 2538 kbit/s
+(2538), `burst-loss` 3084 (3083), `link-drop` 3056 (3056, restored link 50 %), `real-ride` 2952
+(2950), `trace-city` 3043 (3043), `trace-drive` 2182 (2118), `varying-bandwidth` 3046 (3046);
+latency p99 +0 to +5 ms, within what the baseline itself moves between the two runs; frames lost
+`real-ride` 18 (11), `trace-drive` 189 (172), the rest unchanged. What it took, in order: no probe
+run while the upload has a backlog (CI 45253171813: `trace-drive` 95.6 %), a quiet link's lost
+packets freed (CI 45278362883: 87.6 %), the live ratio cap (`varying-bandwidth` 2922 kbit/s
+intact uncapped). Not built: resuming across a restart of either side (`roadmap.md`).
+
 ## Alternative to evaluate
 
 Multipath QUIC with datagrams (IETF draft): a standard, but a large dependency and less control over media-aware scheduling.
