@@ -50,6 +50,7 @@ dependencies = [
  "bonding-protocol",
  "bonding-receiver",
  "bonding-sender",
+ "freewheel-noise",
 ]
 
 [[package]]
