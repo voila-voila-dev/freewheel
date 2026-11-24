@@ -194,8 +194,12 @@ them out. Locally, 3 runs each: encrypted 2903–2972 (6–13 encoder changes), 
 (1–5); without the recording, encrypted and in clear alike (2967–3033, 2941–2976); in clear with
 1447-byte chunks (encryption's size), 2735–3011. So it is the upload with the smaller chunk, not the
 cryptography: step 6 rode the drops with 0.7 % to spare, and the upload's share of a link whose
-capacity drops at once is what tips it (`decisions.md`, 2026-11-24, `LIVE_RATIO_PERCENT`). Open:
-Emilien's call (`roadmap.md`).
+capacity drops at once is what tips it (`decisions.md`, 2026-11-24, `LIVE_RATIO_PERCENT`).
+Emilien's call, 2026-11-24: the upload is a feature on top, off by default, and the transport is
+judged without it (the bench runs ours with and without it, `labs/srtla-capture/README.md`,
+"Transport bench"); with it on, `LIVE_RATIO_PERCENT` defaults to 75 (locally, 3 encrypted runs:
+2913–3040 kbit/s intact, median 3000, the recording whole 1–2 s later than at 100 %), and 0 holds
+the whole upload for after the live.
 
 ## First candidate (M1b step 3)
 
@@ -415,7 +419,8 @@ the binaries only:
 - `bonding_sender::freewheel::RecordingSettings`: `FREEWHEEL_RECORDING` (the recording's path;
   unset, no upload), then `FREEWHEEL_RECORDING_` + `CHUNK_BYTES` (1471, a full datagram),
   `SHARE_PERCENT` (of the room the live traffic leaves; 100), `LIVE_RATIO_PERCENT` (of the
-  live bytes in flight on the link, while the live stream runs; 100), `QUEUE_TARGET_MS` (10),
+  live bytes in flight on the link, while the live stream runs; 75 since step 7, 100 before; 0:
+  nothing during the live, everything after), `QUEUE_TARGET_MS` (10),
   `BASE_RTT_WINDOW_S` (10), `WINDOW_GAIN_CHUNKS` (4), `IDLE_LIVE_BPS` (100000),
   `LOSS_TIMEOUT_MS` (1500),
   `END_IDLE_MS` (the recording has ended when it has not grown for that long; 2000), `DRAIN_S`

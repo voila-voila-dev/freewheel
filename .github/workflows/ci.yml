@@ -180,7 +180,8 @@ jobs:
   transport-bench:
     # What M1b is judged on, scenario by scenario: frames lost, longest gap, delivered bitrate,
     # encoder-to-server latency. Baseline (upstream SRTLA + SRT), our compatibility mode,
-    # irlserver and our own transport (M1b), which --gate holds to the baseline.
+    # irlserver and our own transport (M1b), which --gate holds to the baseline; and our own
+    # transport with the recording upload on, which --recording holds to delivering all of it.
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
@@ -192,6 +193,8 @@ jobs:
           cargo run --release -p packet-capture --bin bench-transport -- .cache/transport-bench --json bench/transport-results.json | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Gate (our transport against the baseline)
         run: cargo run --release -p packet-capture --bin bench-transport -- .cache/transport-bench --gate transport-transport
+      - name: Gate (the recording upload delivers the whole recording)
+        run: cargo run --release -p packet-capture --bin bench-transport -- .cache/transport-bench --recording transport-transport+recording
       - if: always()
         uses: actions/upload-artifact@v4
         with:

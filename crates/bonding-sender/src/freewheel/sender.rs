@@ -604,11 +604,14 @@ impl Sender {
     /// ([`InFlight::live_view_bytes`](super::InFlight::live_view_bytes)): they yield to it.
     /// Never padding: spare room carries the recording or nothing.
     fn fill_spare_capacity(&mut self, now_us: u64, io: &mut impl SenderIo) {
+        if self.upload_held(now_us) {
+            return;
+        }
+        let live_idle = self.live_activity.idle(now_us, self.spare_idle_live_bps);
         let Some(upload) = &mut self.recording else {
             return;
         };
         let (session_id, receiver) = (self.session_id, self.receiver);
-        let live_idle = self.live_activity.idle(now_us, self.spare_idle_live_bps);
         let window_settings = |link: &Link| SpareWindowSettings {
             queue_target_us: spare_queue_target_us(
                 link,
@@ -722,6 +725,22 @@ impl Sender {
         }
     }
 
+    /// An upload with a backlog fills every link's spare room up to its window, and what a link
+    /// delivers then is what it carries: a probe run would only stop it for the run and its
+    /// settling (a third of every second), so runs wait for the backlog to clear.
+    fn upload_has_backlog(&self, now_us: u64) -> bool {
+        self.recording
+            .as_ref()
+            .is_some_and(|upload| upload.has_backlog(now_us))
+    }
+
+    /// `LIVE_RATIO_PERCENT` 0 while the live stream runs: the upload waits for its end (probe
+    /// runs pad instead of carrying chunks).
+    fn upload_held(&mut self, now_us: u64) -> bool {
+        self.spare_shares.live_ratio_percent == 0
+            && !self.live_activity.idle(now_us, self.spare_idle_live_bps)
+    }
+
     /// Starts runs of padding on the links due for one, and paces the runs going on
     /// (`probe.rs`).
     fn probe(&mut self, now_us: u64, io: &mut impl SenderIo) {
@@ -738,14 +757,9 @@ impl Sender {
         let below_maximum = probing.below_maximum();
         let wanted = probing.wanted(capacity_bps);
         let wanted_capacity_bps = probing.target.wanted_capacity_bps;
-        // An upload with a backlog fills every link's spare room up to its window, and what a
-        // link delivers then is what it carries: a probe run would only stop it for the run
-        // and its settling (a third of every second), so runs wait for the backlog to clear.
-        let uploading = self
-            .recording
-            .as_ref()
-            .is_some_and(|upload| upload.has_backlog(now_us));
-        let (session_id, receiver) = (self.session_id, self.receiver);
+        let uploading = self.upload_has_backlog(now_us);
+        let (upload_held, session_id, receiver) =
+            (self.upload_held(now_us), self.session_id, self.receiver);
         for link in &mut self.links {
             link.probe.advance(now_us);
             if !link.usable() {
@@ -801,7 +815,7 @@ impl Sender {
                     header,
                     sequence,
                     now_us,
-                    self.recording.as_mut(),
+                    self.recording.as_mut().filter(|_| !upload_held),
                 ) else {
                     stall(
                         link,

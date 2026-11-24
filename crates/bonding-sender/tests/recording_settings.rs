@@ -87,7 +87,7 @@ fn a_setting_out_of_range_is_refused_with_its_variable() {
         (SHARE_PERCENT_VARIABLE, "0"),
         (SHARE_PERCENT_VARIABLE, "101"),
         (SHARE_PERCENT_VARIABLE, "half"),
-        (LIVE_RATIO_PERCENT_VARIABLE, "0"),
+        (LIVE_RATIO_PERCENT_VARIABLE, "-1"),
         (LOSS_TIMEOUT_MS_VARIABLE, "0"),
         (QUEUE_TARGET_MS_VARIABLE, "0"),
         (BASE_RTT_WINDOW_S_VARIABLE, "0"),
@@ -106,4 +106,19 @@ fn a_setting_out_of_range_is_refused_with_its_variable() {
             "{error}"
         );
     }
+}
+
+#[test]
+fn a_live_ratio_of_zero_holds_the_upload_for_after_the_live() {
+    let settings = read(&[
+        (RECORDING_VARIABLE, "/tmp/r"),
+        (LIVE_RATIO_PERCENT_VARIABLE, "0"),
+    ]);
+    assert_eq!(
+        settings
+            .ok()
+            .flatten()
+            .map(|settings| settings.live_ratio_percent),
+        Some(0)
+    );
 }

@@ -218,11 +218,14 @@ or +3 frames, whichever is more, 2 % less intact video, +20 ms p50, +50 ms p99),
 overall, and gives a restored link at least 90 % of an even split (45 % on `link-drop`) and the baseline's share. The
 frame slack is for scenarios where the links cannot carry the stream (`real-ride`, two of three
 links cut): every transport loses the same seconds there, and the count is a coin toss.
-**Recording delivered** (M1b step 6, our transport only: `bench-transport.sh` sets `RECORDING=1`
-for `transport/transport`, `RECORDING=0` turns it off): `100 % in <s> s` when every run got the
-whole recording byte for byte (median time after the stream ended), else the worst run's share
-and how many runs were whole; `–` without a recording (the baseline). The gate's bar there is
-absolute: every scenario that recorded must arrive whole in every run. CI job `transport-bench`.
+**Recording delivered** (M1b step 6): our transport runs twice, as it does by default
+(`transport/transport`, no upload: what `--gate` judges against the baseline) and with the
+recording upload on (`transport/transport+recording`, `RECORDING=1`). The upload is a feature on
+top, off by default, so the transport is judged without it (Emilien, 2026-11-24); `--recording
+transport-transport+recording` fails unless every scenario got the whole recording in every run.
+The column reads `100 % in <s> s` when every run got it byte for byte (median time after the
+stream ended), else the worst run's share and how many runs were whole; `–` without a recording.
+CI job `transport-bench`.
 
 A second table says why frames were lost (`packet_capture::LossCauses`), so the next mechanism
 goes where the frames are: **capacity** (the links together carried less than the stream that

@@ -2,13 +2,16 @@
 //! scenario, on the measures M1b is judged on (`docs/technical/protocol/freewheel.md`, "How we
 //! decide").
 //!
-//! Usage: `bench-transport <bench directory> [--json <file>] [--gate <receiver>-<sender>]`
+//! Usage: `bench-transport <bench directory> [--json <file>] [--gate <receiver>-<sender>]
+//! [--recording <receiver>-<sender>]`
 //!
 //! The directory holds `<receiver>-<sender>/run-<n>/` lab runs. Every measure is the median over
 //! the runs: they all vary from run to run by themselves. `--gate` compares one combination (a
 //! candidate) with the baseline, upstream SRTLA + SRT, and fails unless it does at least as well
 //! on every scenario and loses fewer frames overall, and, on every scenario where it uploaded a
-//! recording (M1b step 6), delivered all of it in every run.
+//! recording (M1b step 6), delivered all of it in every run. `--recording` holds a combination
+//! that uploads a recording (`transport-transport+recording`) to that alone: the upload is a
+//! feature on top, off by default, and the transport is judged without it (Emilien, 2026-11-24).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -17,8 +20,8 @@ use std::process::ExitCode;
 
 use packet_capture::{LabRun, LossCauses, median, spread};
 
-const USAGE: &str =
-    "usage: bench-transport <bench directory> [--json <file>] [--gate <receiver>-<sender>]";
+const USAGE: &str = "usage: bench-transport <bench directory> [--json <file>] \
+     [--gate <receiver>-<sender>] [--recording <receiver>-<sender>]";
 const BASELINE: &str = "upstream-upstream";
 /// The scenario where one link dies and comes back alone: the only one whose restored link
 /// share means something (in `all-links-drop` every link comes back at once).
@@ -113,6 +116,7 @@ struct Options {
     directory: String,
     json: Option<String>,
     gate: Option<String>,
+    recording: Option<String>,
 }
 
 fn main() -> ExitCode {
@@ -142,8 +146,27 @@ fn main() -> ExitCode {
         eprintln!("cannot write {path}: {error}");
         return ExitCode::FAILURE;
     }
+    let recording_failures = options
+        .recording
+        .as_ref()
+        .map(|candidate| recording_gate(&results, candidate));
+    if let (Some(candidate), Some(failures)) = (&options.recording, &recording_failures) {
+        if failures.is_empty() {
+            println!("\n{candidate} delivered the whole recording in every run of every scenario.");
+        } else {
+            println!("\n{candidate} did not deliver the whole recording:");
+            for failure in failures {
+                println!("- {failure}");
+            }
+        }
+    }
+    let recording_failed = recording_failures.is_some_and(|failures| !failures.is_empty());
     let Some(candidate) = &options.gate else {
-        return ExitCode::SUCCESS;
+        return if recording_failed {
+            ExitCode::FAILURE
+        } else {
+            ExitCode::SUCCESS
+        };
     };
     let failures = gate(&results, candidate);
     let recorded = results
@@ -159,7 +182,11 @@ fn main() -> ExitCode {
     }
     if failures.is_empty() {
         println!("{candidate} beats the baseline on every scenario.");
-        ExitCode::SUCCESS
+        if recording_failed {
+            ExitCode::FAILURE
+        } else {
+            ExitCode::SUCCESS
+        }
     } else {
         println!("{candidate} does not beat the baseline:");
         for failure in &failures {
@@ -175,11 +202,13 @@ fn parse_options(arguments: Vec<String>) -> Option<Options> {
         directory: arguments.next()?,
         json: None,
         gate: None,
+        recording: None,
     };
     while let Some(flag) = arguments.next() {
         match flag.as_str() {
             "--json" => options.json = Some(arguments.next()?),
             "--gate" => options.gate = Some(arguments.next()?),
+            "--recording" => options.recording = Some(arguments.next()?),
             _ => return None,
         }
     }
@@ -399,6 +428,31 @@ fn show_percent(value: f64) -> String {
     } else {
         format!("{value:.0} %")
     }
+}
+
+/// The scenarios where `candidate` did not deliver its whole recording in every run, or recorded
+/// nothing: one line each.
+fn recording_gate(results: &Results, candidate: &str) -> Vec<String> {
+    let mut failures = Vec::new();
+    let mut scenarios = 0;
+    for ((scenario, combination), s) in results {
+        if combination != candidate {
+            continue;
+        }
+        scenarios += 1;
+        if s.recording.runs == 0 {
+            failures.push(format!("{scenario}: no recording"));
+        } else if s.recording.whole_runs < s.recording.runs {
+            failures.push(format!(
+                "{scenario}, recording delivered: {}",
+                show_recording(&s.recording)
+            ));
+        }
+    }
+    if scenarios == 0 {
+        failures.push(format!("no runs of {candidate}"));
+    }
+    failures
 }
 
 /// What the candidate misses against the baseline, one line per scenario and measure.

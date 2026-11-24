@@ -341,3 +341,29 @@ fn the_upload_holds_little_on_a_link_whose_capacity_drops() {
         "live p99 after the drop: {with_us} µs with the upload, {without_us} µs without"
     );
 }
+
+/// With `LIVE_RATIO_PERCENT` at 0, nothing of the recording goes while the live stream runs, and
+/// all of it after.
+#[test]
+fn a_live_ratio_of_zero_uploads_only_after_the_live() {
+    let mut network = Network::new(&[
+        LinkSpec::new(30 * MS, 8 * MBPS),
+        LinkSpec::new(50 * MS, 8 * MBPS),
+    ]);
+    let mut settings = recording_settings();
+    settings.live_ratio_percent = 0;
+    network.enable_recording(&settings);
+    let recording = random_bytes(300_000, 11);
+    network.run(500 * MS, 0);
+    for second in 0..3 {
+        network.record(&recording[second * 100_000..(second + 1) * 100_000]);
+        network.run(S, 3 * MBPS);
+    }
+    assert!(
+        network.recording_copy().len() < 10_000,
+        "{} bytes went during the live",
+        network.recording_copy().len()
+    );
+    network.run(10 * S, 0);
+    assert_eq!(network.recording_copy(), recording);
+}

@@ -41,11 +41,14 @@ pub const DEFAULT_CHUNK_BYTES: usize = MAX_RECORDING_CHUNK_LEN;
 /// bandwidth-delay product, so this leaves the upload room to find more than the links are
 /// estimated to carry; what keeps the live stream from waiting is the queue target.
 pub const DEFAULT_SHARE_PERCENT: u64 = 100;
-/// Default [`RecordingSettings::live_ratio_percent`]: as much as the live traffic (Emilien,
-/// 2026-11-24, `decisions.md`). On the simulated `varying-bandwidth` (8 → 1 Mbit/s), the live
-/// p99 right after the drop was 80 ms without the upload, 347 ms with no cap, 160 ms at 100 %,
-/// 265 ms at 200 %; the upload carried 2.8, 6.3 and 5.4 Mbit/s during the stream.
-pub const DEFAULT_LIVE_RATIO_PERCENT: u64 = 100;
+/// Default [`RecordingSettings::live_ratio_percent`]: three quarters of the live traffic
+/// (Emilien, 2026-11-24, `decisions.md`; 100 % in step 6). On the simulated `varying-bandwidth`
+/// (8 → 1 Mbit/s), the live p99 right after the drop was 80 ms without the upload, 347 ms with
+/// no cap, 160 ms at 100 %, 265 ms at 200 %; the upload carried 2.8, 6.3 and 5.4 Mbit/s during the
+/// stream. Encrypted (smaller chunks), 100 % no longer rode the lab's drops (CI 45423144243:
+/// 2918 kbit/s intact against the baseline's 3024); locally, three runs at 75 %: 2913–3040,
+/// the recording whole 1–2 s later.
+pub const DEFAULT_LIVE_RATIO_PERCENT: u64 = 75;
 /// Default [`RecordingSettings::queue_target_us`]: what the live stream's packets may wait
 /// behind the upload. On the simulated network (two 2 Mbit/s links nearly full of live, or two
 /// 8 Mbit/s links), 10 ms kept the live p99 within 5 ms of no upload, 30 ms cost it 20–40 ms.
@@ -91,7 +94,8 @@ pub struct RecordingSettings {
     /// traffic leaves of it, from 1 to 100 ([`SHARE_PERCENT_VARIABLE`], default [`DEFAULT_SHARE_PERCENT`]).
     pub share_percent: u64,
     /// While the live stream is not idle, the upload's bytes in flight on a link stay under this
-    /// share of the live bytes in flight on it, in per cent, from 1: a link whose capacity
+    /// share of the live bytes in flight on it, in per cent; 0: nothing while the live stream
+    /// runs, the whole recording after it: a link whose capacity
     /// drops at once delivers what it holds late, the live packets behind the upload's
     /// included, so what it holds is kept near what step 5 had there. No cap once the live
     /// stream is idle ([`LIVE_RATIO_PERCENT_VARIABLE`], default [`DEFAULT_LIVE_RATIO_PERCENT`]).
@@ -223,7 +227,7 @@ impl RecordingSettings {
                 .unwrap_or(defaults.share_percent),
             live_ratio_percent: number(
                 LIVE_RATIO_PERCENT_VARIABLE,
-                1,
+                0,
                 u64::from(u32::MAX),
                 "a whole per cent",
             )?
