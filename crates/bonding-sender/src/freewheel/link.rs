@@ -38,6 +38,9 @@ pub struct Link {
     pub(crate) base_rtt: BaseRtt,
     /// The recording upload's window on it.
     pub(crate) spare_window: SpareWindow,
+    /// Last ACK that found nothing in flight or took packets out of flight: ACKs passing
+    /// packets in flight for long without taking them out mean they are lost.
+    pub(crate) in_flight_progress_us: u64,
 }
 
 impl Link {
@@ -60,6 +63,7 @@ impl Link {
             probe: LinkProbe::default(),
             base_rtt: BaseRtt::default(),
             spare_window: SpareWindow::default(),
+            in_flight_progress_us: 0,
         }
     }
 

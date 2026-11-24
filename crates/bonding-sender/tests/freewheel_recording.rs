@@ -260,3 +260,84 @@ fn a_backlog_fills_the_links_without_probe_runs_in_its_way() {
         "the upload carried {upload_bps} bit/s of {capacity_bps}"
     );
 }
+
+/// `trace-drive` (CI 45278362883): a link went quiet for a dead second of its trace just as the
+/// stream ended, its way back still answering: no stall. The upload's last chunks on it were lost, and no later
+/// packet came to take them out of flight: they filled its window for good, and the link carried
+/// nothing for the whole drain while its keepalives were answered.
+#[test]
+fn chunks_lost_as_a_link_goes_quiet_do_not_block_it() {
+    let mut network = Network::new(&[
+        LinkSpec::new(20 * MS, 2 * MBPS),
+        LinkSpec::new(20 * MS, 2 * MBPS),
+    ]);
+    network.enable_recording(&recording_settings());
+    network.run(500 * MS, 0);
+    network.record(&random_bytes(5_000_000, 8));
+    network.run(3 * S, 0);
+    // Dead uplink, as netem's `loss 100%`: what is sent is lost, the way back still works.
+    network.set_uplink_lost(0, true);
+    network.run(250 * MS, 0);
+    network.set_uplink_lost(0, false);
+    network.run(3 * S, 0);
+    network.take_data_counts();
+    network.run(2 * S, 0);
+    let counts = network.take_data_counts();
+    assert!(
+        counts.first().is_some_and(|&packets| packets > 100),
+        "the link back carried {counts:?} packets"
+    );
+}
+
+/// Live p99 right after a link drops from 8 to 1 Mbit/s at once, the live stream at 3.3 Mbit/s
+/// over it and a 4 Mbit/s link, with the upload or without (`varying-bandwidth`).
+fn live_p99_after_a_drop_us(settings: Option<&RecordingSettings>) -> u64 {
+    const RATES_BPS: [u64; 2] = [4 * MBPS, 8 * MBPS];
+    const QUEUE_PACKETS: u64 = 50;
+    const PACKET_BITS: u64 = 1_500 * 8;
+    let mut network = Network::new(&RATES_BPS.map(|rate_bps| LinkSpec::new(20 * MS, rate_bps)));
+    let queue_us = |rate_bps: u64| QUEUE_PACKETS * PACKET_BITS * S / rate_bps;
+    for (link, rate_bps) in RATES_BPS.iter().enumerate() {
+        network.set_max_queue_us(link, queue_us(*rate_bps));
+    }
+    network.enable_probing(lab_target());
+    if let Some(settings) = settings {
+        network.enable_recording(settings);
+    }
+    let chunk = random_bytes(75_000, 9);
+    network.run(500 * MS, 0);
+    let run = |network: &mut Network| {
+        for _ in 0..20 {
+            if settings.is_some() {
+                network.record(&chunk);
+            }
+            network.run(100 * MS, 3_300_000);
+        }
+    };
+    for _ in 0..3 {
+        run(&mut network);
+    }
+    network.take_latencies_us();
+    network.set_rate(1, MBPS);
+    network.set_max_queue_us(1, queue_us(MBPS));
+    run(&mut network);
+    let mut latencies_us = network.take_latencies_us();
+    latencies_us.sort_unstable();
+    latencies_us
+        .get(latencies_us.len() * 99 / 100)
+        .copied()
+        .unwrap_or(u64::MAX)
+}
+
+/// While the live stream runs, the upload holds no more on a link than the live traffic does:
+/// when the link's capacity drops at once, the live packets behind it wait about twice what
+/// they did without the upload (CI 45278362883: 8 → 1 Mbit/s, the encoder backed off for 3 s).
+#[test]
+fn the_upload_holds_little_on_a_link_whose_capacity_drops() {
+    let without_us = live_p99_after_a_drop_us(None);
+    let with_us = live_p99_after_a_drop_us(Some(&recording_settings()));
+    assert!(
+        with_us * 2 <= without_us * 5,
+        "live p99 after the drop: {with_us} µs with the upload, {without_us} µs without"
+    );
+}

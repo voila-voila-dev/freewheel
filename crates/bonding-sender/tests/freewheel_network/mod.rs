@@ -56,6 +56,8 @@ impl LinkSpec {
 struct SimLink {
     spec: LinkSpec,
     up: bool,
+    /// Its uplink loses everything (netem's `loss 100%`); the way back still works.
+    uplink_lost: bool,
     busy_until_us: u64,
     data_packets: u64,
     live_packets: u64,
@@ -224,6 +226,7 @@ impl Network {
                 .map(|spec| SimLink {
                     spec: *spec,
                     up: true,
+                    uplink_lost: false,
                     busy_until_us: 0,
                     data_packets: 0,
                     live_packets: 0,
@@ -345,6 +348,13 @@ impl Network {
     pub fn set_up(&mut self, link: usize, up: bool) {
         if let Some(sim) = self.links.get_mut(link) {
             sim.up = up;
+        }
+    }
+
+    /// Makes a link's uplink lose everything sent on it, or stop losing; its way back works.
+    pub fn set_uplink_lost(&mut self, link: usize, lost: bool) {
+        if let Some(sim) = self.links.get_mut(link) {
+            sim.uplink_lost = lost;
         }
     }
 
@@ -474,7 +484,7 @@ impl Network {
             let Some(sim) = self.links.get_mut(link) else {
                 continue;
             };
-            if !sim.up {
+            if !sim.up || sim.uplink_lost {
                 continue;
             }
             let start_us = sim.busy_until_us.max(now_us);

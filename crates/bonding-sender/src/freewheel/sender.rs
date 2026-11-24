@@ -67,11 +67,14 @@ pub struct Sender {
     recording_finished_reported: bool,
     /// The upload's share of a link's spare room, in per cent, and the queue beyond which it
     /// sends nothing there, in microseconds ([`RecordingSettings`]).
-    spare_share_percent: u64,
+    spare_shares: SpareShares,
     spare_queue_target_us: u64,
     spare_base_rtt_window_us: u64,
     spare_gain_bytes: u64,
     spare_idle_live_bps: u64,
+    /// With the upload on, packets ACKs pass for this long are lost
+    /// ([`RecordingSettings::loss_timeout_us`]); `None` with the upload off, as in step 5.
+    stale_in_flight_us: Option<u64>,
     /// The live traffic of the last second, for the upload's queue target.
     live_activity: LiveActivity,
 }
@@ -109,11 +112,15 @@ impl Sender {
             recording: None,
             recording_ended_reported: false,
             recording_finished_reported: false,
-            spare_share_percent: 0,
+            spare_shares: SpareShares {
+                share_percent: 0,
+                live_ratio_percent: 0,
+            },
             spare_queue_target_us: 0,
             spare_base_rtt_window_us: 0,
             spare_gain_bytes: 0,
             spare_idle_live_bps: 0,
+            stale_in_flight_us: None,
             live_activity: LiveActivity::new(),
         }
     }
@@ -125,11 +132,15 @@ impl Sender {
     /// ([`fill_spare_capacity`](Self::fill_spare_capacity)).
     pub fn enable_recording(&mut self, settings: &RecordingSettings) {
         self.recording = Some(RecordingUpload::new(settings));
-        self.spare_share_percent = settings.share_percent;
+        self.spare_shares = SpareShares {
+            share_percent: settings.share_percent,
+            live_ratio_percent: settings.live_ratio_percent,
+        };
         self.spare_queue_target_us = settings.queue_target_us;
         self.spare_base_rtt_window_us = settings.base_rtt_window_us;
         self.spare_gain_bytes = settings.window_gain_chunks * settings.chunk_bytes as u64;
         self.spare_idle_live_bps = settings.idle_live_bps;
+        self.stale_in_flight_us = Some(settings.loss_timeout_us);
     }
 
     /// The recording upload, if enabled.
@@ -346,11 +357,12 @@ impl Sender {
                     .is_some()
                     .then_some(self.spare_base_rtt_window_us);
                 let live_idle = self.live_activity.idle(now_us, self.spare_idle_live_bps);
-                let (spare_share_percent, queue_target_us, spare_gain_bytes) = (
-                    self.spare_share_percent,
+                let (spare_shares, queue_target_us, spare_gain_bytes) = (
+                    self.spare_shares,
                     self.spare_queue_target_us,
                     self.spare_gain_bytes,
                 );
+                let stale_in_flight_us = self.stale_in_flight_us;
                 let Some(link) = self.link_by_id(ack.header.link_id) else {
                     return;
                 };
@@ -358,6 +370,17 @@ impl Sender {
                     accept(link, now_us, io);
                 }
                 let left_flight_bytes = link.in_flight.acknowledge(ack.timing.largest_sequence);
+                if left_flight_bytes > 0 || link.in_flight.is_empty() {
+                    link.in_flight_progress_us = now_us;
+                } else if stale_in_flight_us.is_some_and(|stale_us| {
+                    now_us.saturating_sub(link.in_flight_progress_us) > stale_us
+                }) {
+                    // ACKs keep coming (for keepalives) and none takes these packets out: they
+                    // were lost, the last ones sent before the link went quiet. Kept, they would
+                    // fill the upload's window for good, and nothing would be sent to find out.
+                    link.in_flight.clear();
+                    link.in_flight_progress_us = now_us;
+                }
                 link.estimate.on_ack(now_us, ack.timing, left_flight_bytes);
                 link.probe.on_ack(
                     now_us,
@@ -383,7 +406,7 @@ impl Sender {
                             ),
                             gain_bytes: spare_gain_bytes,
                             min_bytes: MIN_SPARE_WINDOW_BYTES,
-                            max_bytes: spare_cap_bytes(link, now_us, spare_share_percent),
+                            max_bytes: spare_cap_bytes(link, now_us, spare_shares, live_idle),
                         };
                         link.spare_window.on_acknowledged(
                             now_us,
@@ -502,7 +525,7 @@ impl Sender {
             ),
             gain_bytes: self.spare_gain_bytes,
             min_bytes: MIN_SPARE_WINDOW_BYTES,
-            max_bytes: spare_cap_bytes(link, now_us, self.spare_share_percent),
+            max_bytes: spare_cap_bytes(link, now_us, self.spare_shares, live_idle),
         };
         // One chunk at a time, to the link whose spare window is the least full: on alike links
         // they carry alike shares, so what the live traffic measures of them stays alike.
@@ -930,11 +953,25 @@ fn spare_queue_target_us(link: &Link, now_us: u64, queue_target_us: u64, live_id
 /// traffic leaves of its congestion window, at the capacity it is estimated to carry. The
 /// window is twice the bandwidth-delay product, so the upload can find more than the estimate
 /// (which only says what the link was given); the spare window keeps the queue short.
-fn spare_cap_bytes(link: &Link, now_us: u64, share_percent: u64) -> u64 {
+fn spare_cap_bytes(link: &Link, now_us: u64, shares: SpareShares, live_idle: bool) -> u64 {
+    let live_bytes = link.in_flight.live_view_bytes();
     let window_bytes = link
         .estimate
         .congestion_window_bytes(link.capacity_bps(now_us));
-    window_bytes.saturating_sub(link.in_flight.live_view_bytes()) * share_percent / PERCENT
+    let cap_bytes = window_bytes.saturating_sub(live_bytes) * shares.share_percent / PERCENT;
+    if live_idle {
+        cap_bytes
+    } else {
+        cap_bytes.min(live_bytes * shares.live_ratio_percent / PERCENT)
+    }
+}
+
+/// The upload's caps on a link, in per cent ([`RecordingSettings::share_percent`],
+/// [`RecordingSettings::live_ratio_percent`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SpareShares {
+    share_percent: u64,
+    live_ratio_percent: u64,
 }
 
 fn stall(

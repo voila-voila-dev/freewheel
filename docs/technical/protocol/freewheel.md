@@ -308,7 +308,8 @@ the binaries only:
 
 - `bonding_sender::freewheel::RecordingSettings`: `FREEWHEEL_RECORDING` (the recording's path;
   unset, no upload), then `FREEWHEEL_RECORDING_` + `CHUNK_BYTES` (1471, a full datagram),
-  `SHARE_PERCENT` (of the room the live traffic leaves; 100), `QUEUE_TARGET_MS` (10),
+  `SHARE_PERCENT` (of the room the live traffic leaves; 100), `LIVE_RATIO_PERCENT` (of the
+  live bytes in flight on the link, while the live stream runs; 100), `QUEUE_TARGET_MS` (10),
   `BASE_RTT_WINDOW_S` (10), `WINDOW_GAIN_CHUNKS` (4), `IDLE_LIVE_BPS` (100000),
   `LOSS_TIMEOUT_MS` (1500),
   `END_IDLE_MS` (the recording has ended when it has not grown for that long; 2000), `DRAIN_S`
@@ -353,20 +354,29 @@ once per RTT past twice it. While the live traffic is idle (under `IDLE_LIVE_BPS
 second, as during the drain), the target widens by the serialisation of four packets and twice
 the RTT variation, so a slow or jittery link is not read as queuing. The window never exceeds
 `SHARE_PERCENT` of the link's congestion window minus the live bytes in flight, and the live
-traffic's decisions do not count the recording's bytes (they yield to it). Each chunk goes to
+traffic's decisions do not count the recording's bytes (they yield to it). While the live
+stream runs, it also stays under `LIVE_RATIO_PERCENT` of the live bytes in flight on the link: a
+link whose capacity drops at once delivers what it holds late, the live packets behind the
+upload's included (CI 45278362883, `varying-bandwidth`, 8 → 1 Mbit/s: SRT resent what came late
+and the encoder backed off for 3 s; on the simulated drop, live p99 80 ms without the upload,
+347 ms uncapped, 160 ms at 100 %, Emilien's choice, `decisions.md` 2026-11-24). Each chunk goes to
 the link whose spare window is the least full, so alike links carry alike shares and what the
 live traffic measures of them stays alike. Probe runs carry chunks instead of padding (padding
 only when no chunk is ready), and none starts while the upload has a backlog: the upload fills
 every link's spare room itself, so what a link delivers is what it carries, and a run would
 only stop the upload for the run and its settling, a third of every second (CI 45253171813:
 `trace-drive` drained at 2.7 of its 3.96 Mbit/s). A link back from a stall is still probed at
-once. Tests:
+once. With the upload on, packets that ACKs (of keepalives) pass for `LOSS_TIMEOUT_MS` without
+taking out of flight are lost: the last ones sent as a link went quiet (a dead second of
+`trace-drive`, shorter than a stall) would otherwise fill its window for good, and nothing would
+be sent to find out (CI 45278362883: a link carried nothing for the whole drain). Tests:
 `tests/recording_upload.rs` (scripted ACKs: losses, another link's ACK, an outage of every link
 with each chunk delivered exactly once, timeouts, late deliveries, the window, the tail,
 wrapping sequences), `tests/freewheel_recording.rs` (the real sender and receiver on the
 simulated network: the copy is the recording byte for byte, through an outage of every link,
 the live stream losing nothing, latency p99 with the upload on, a restored link's live share,
-a backlog filling links that probing would interrupt), and `tests/freewheel_zero_allocations.rs` with probing and the
+a backlog filling links that probing would interrupt, chunks lost as a link goes quiet, a
+link whose capacity drops at once), and `tests/freewheel_zero_allocations.rs` with probing and the
 upload on.
 
 Off, both sides are step 5's to the bit: `tests/freewheel_recording_off.rs` digests every

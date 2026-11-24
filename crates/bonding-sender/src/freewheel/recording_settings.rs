@@ -14,6 +14,8 @@ pub const RECORDING_VARIABLE: &str = "FREEWHEEL_RECORDING";
 pub const CHUNK_BYTES_VARIABLE: &str = "FREEWHEEL_RECORDING_CHUNK_BYTES";
 /// [`RecordingSettings::share_percent`].
 pub const SHARE_PERCENT_VARIABLE: &str = "FREEWHEEL_RECORDING_SHARE_PERCENT";
+/// [`RecordingSettings::live_ratio_percent`].
+pub const LIVE_RATIO_PERCENT_VARIABLE: &str = "FREEWHEEL_RECORDING_LIVE_RATIO_PERCENT";
 /// [`RecordingSettings::queue_target_us`], in milliseconds.
 pub const QUEUE_TARGET_MS_VARIABLE: &str = "FREEWHEEL_RECORDING_QUEUE_TARGET_MS";
 /// [`RecordingSettings::base_rtt_window_us`], in seconds.
@@ -39,6 +41,11 @@ pub const DEFAULT_CHUNK_BYTES: usize = MAX_RECORDING_CHUNK_LEN;
 /// bandwidth-delay product, so this leaves the upload room to find more than the links are
 /// estimated to carry; what keeps the live stream from waiting is the queue target.
 pub const DEFAULT_SHARE_PERCENT: u64 = 100;
+/// Default [`RecordingSettings::live_ratio_percent`]: as much as the live traffic (Emilien,
+/// 2026-11-24, `decisions.md`). On the simulated `varying-bandwidth` (8 → 1 Mbit/s), the live
+/// p99 right after the drop was 80 ms without the upload, 347 ms with no cap, 160 ms at 100 %,
+/// 265 ms at 200 %; the upload carried 2.8, 6.3 and 5.4 Mbit/s during the stream.
+pub const DEFAULT_LIVE_RATIO_PERCENT: u64 = 100;
 /// Default [`RecordingSettings::queue_target_us`]: what the live stream's packets may wait
 /// behind the upload. On the simulated network (two 2 Mbit/s links nearly full of live, or two
 /// 8 Mbit/s links), 10 ms kept the live p99 within 5 ms of no upload, 30 ms cost it 20–40 ms.
@@ -83,6 +90,12 @@ pub struct RecordingSettings {
     /// Most of a link's congestion window the upload takes, in per cent of what the live
     /// traffic leaves of it, from 1 to 100 ([`SHARE_PERCENT_VARIABLE`], default [`DEFAULT_SHARE_PERCENT`]).
     pub share_percent: u64,
+    /// While the live stream is not idle, the upload's bytes in flight on a link stay under this
+    /// share of the live bytes in flight on it, in per cent, from 1: a link whose capacity
+    /// drops at once delivers what it holds late, the live packets behind the upload's
+    /// included, so what it holds is kept near what step 5 had there. No cap once the live
+    /// stream is idle ([`LIVE_RATIO_PERCENT_VARIABLE`], default [`DEFAULT_LIVE_RATIO_PERCENT`]).
+    pub live_ratio_percent: u64,
     /// The upload's room on a link shrinks in proportion as its queue grows (smoothed RTT
     /// over its RTT without a queue), none left at this, in microseconds: the live stream's packets
     /// wait behind what it queues
@@ -129,6 +142,7 @@ impl RecordingSettings {
             path,
             chunk_bytes: DEFAULT_CHUNK_BYTES,
             share_percent: DEFAULT_SHARE_PERCENT,
+            live_ratio_percent: DEFAULT_LIVE_RATIO_PERCENT,
             queue_target_us: DEFAULT_QUEUE_TARGET_US,
             base_rtt_window_us: DEFAULT_BASE_RTT_WINDOW_US,
             window_gain_chunks: DEFAULT_WINDOW_GAIN_CHUNKS,
@@ -171,6 +185,24 @@ impl RecordingSettings {
                 })
                 .transpose()
         };
+        let milliseconds = |name: &'static str, default_us: u64| {
+            number(
+                name,
+                1,
+                u64::MAX / MICROSECONDS_PER_MILLISECOND,
+                "milliseconds",
+            )
+            .map(|ms| ms.map_or(default_us, |ms| ms * MICROSECONDS_PER_MILLISECOND))
+        };
+        let seconds = |name: &'static str, low: u64, default_us: u64| {
+            number(
+                name,
+                low,
+                u64::MAX / MICROSECONDS_PER_SECOND,
+                "a number of seconds",
+            )
+            .map(|s| s.map_or(default_us, |s| s * MICROSECONDS_PER_SECOND))
+        };
         let chunk_bytes = number(
             CHUNK_BYTES_VARIABLE,
             1,
@@ -189,22 +221,19 @@ impl RecordingSettings {
             chunk_bytes: chunk_bytes.unwrap_or(defaults.chunk_bytes),
             share_percent: number(SHARE_PERCENT_VARIABLE, 1, PERCENT, "a whole per cent")?
                 .unwrap_or(defaults.share_percent),
-            queue_target_us: number(
-                QUEUE_TARGET_MS_VARIABLE,
+            live_ratio_percent: number(
+                LIVE_RATIO_PERCENT_VARIABLE,
                 1,
-                u64::MAX / MICROSECONDS_PER_MILLISECOND,
-                "milliseconds",
+                u64::from(u32::MAX),
+                "a whole per cent",
             )?
-            .map_or(defaults.queue_target_us, |ms| {
-                ms * MICROSECONDS_PER_MILLISECOND
-            }),
-            base_rtt_window_us: number(
+            .unwrap_or(defaults.live_ratio_percent),
+            queue_target_us: milliseconds(QUEUE_TARGET_MS_VARIABLE, defaults.queue_target_us)?,
+            base_rtt_window_us: seconds(
                 BASE_RTT_WINDOW_S_VARIABLE,
                 1,
-                u64::MAX / MICROSECONDS_PER_SECOND,
-                "a number of seconds",
-            )?
-            .map_or(defaults.base_rtt_window_us, |s| s * MICROSECONDS_PER_SECOND),
+                defaults.base_rtt_window_us,
+            )?,
             window_gain_chunks: number(
                 WINDOW_GAIN_CHUNKS_VARIABLE,
                 1,
@@ -214,29 +243,9 @@ impl RecordingSettings {
             .unwrap_or(defaults.window_gain_chunks),
             idle_live_bps: number(IDLE_LIVE_BPS_VARIABLE, 0, u64::MAX, "bit/s")?
                 .unwrap_or(defaults.idle_live_bps),
-            loss_timeout_us: number(
-                LOSS_TIMEOUT_MS_VARIABLE,
-                1,
-                u64::MAX / MICROSECONDS_PER_MILLISECOND,
-                "milliseconds",
-            )?
-            .map_or(defaults.loss_timeout_us, |ms| {
-                ms * MICROSECONDS_PER_MILLISECOND
-            }),
-            end_idle_us: number(
-                END_IDLE_MS_VARIABLE,
-                1,
-                u64::MAX / MICROSECONDS_PER_MILLISECOND,
-                "milliseconds",
-            )?
-            .map_or(defaults.end_idle_us, |ms| ms * MICROSECONDS_PER_MILLISECOND),
-            drain_us: number(
-                DRAIN_S_VARIABLE,
-                0,
-                u64::MAX / MICROSECONDS_PER_SECOND,
-                "a number of seconds",
-            )?
-            .map_or(defaults.drain_us, |s| s * MICROSECONDS_PER_SECOND),
+            loss_timeout_us: milliseconds(LOSS_TIMEOUT_MS_VARIABLE, defaults.loss_timeout_us)?,
+            end_idle_us: milliseconds(END_IDLE_MS_VARIABLE, defaults.end_idle_us)?,
+            drain_us: seconds(DRAIN_S_VARIABLE, 0, defaults.drain_us)?,
             window_bytes: number(
                 WINDOW_BYTES_VARIABLE,
                 MAX_RECORDING_CHUNK_LEN as u64,

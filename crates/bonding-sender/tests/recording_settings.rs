@@ -6,8 +6,9 @@ use std::path::PathBuf;
 use bonding_sender::freewheel::{
     BASE_RTT_WINDOW_S_VARIABLE, CHUNK_BYTES_VARIABLE, DEFAULT_CHUNK_BYTES, DRAIN_S_VARIABLE,
     END_IDLE_MS_VARIABLE, IDLE_LIVE_BPS_VARIABLE, IN_FLIGHT_CHUNKS_VARIABLE,
-    LOSS_TIMEOUT_MS_VARIABLE, QUEUE_TARGET_MS_VARIABLE, RECORDING_VARIABLE, RecordingSettings,
-    SHARE_PERCENT_VARIABLE, WINDOW_BYTES_VARIABLE, WINDOW_GAIN_CHUNKS_VARIABLE,
+    LIVE_RATIO_PERCENT_VARIABLE, LOSS_TIMEOUT_MS_VARIABLE, QUEUE_TARGET_MS_VARIABLE,
+    RECORDING_VARIABLE, RecordingSettings, SHARE_PERCENT_VARIABLE, WINDOW_BYTES_VARIABLE,
+    WINDOW_GAIN_CHUNKS_VARIABLE,
 };
 
 fn read(variables: &[(&str, &str)]) -> Result<Option<RecordingSettings>, String> {
@@ -47,6 +48,7 @@ fn every_number_is_a_setting() {
         (RECORDING_VARIABLE, "/tmp/recording.bin"),
         (CHUNK_BYTES_VARIABLE, "1000"),
         (SHARE_PERCENT_VARIABLE, "75"),
+        (LIVE_RATIO_PERCENT_VARIABLE, "250"),
         (QUEUE_TARGET_MS_VARIABLE, "30"),
         (BASE_RTT_WINDOW_S_VARIABLE, "5"),
         (WINDOW_GAIN_CHUNKS_VARIABLE, "2"),
@@ -63,6 +65,7 @@ fn every_number_is_a_setting() {
             path: PathBuf::from("/tmp/recording.bin"),
             chunk_bytes: 1_000,
             share_percent: 75,
+            live_ratio_percent: 250,
             queue_target_us: 30_000,
             base_rtt_window_us: 5_000_000,
             window_gain_chunks: 2,
@@ -84,6 +87,7 @@ fn a_setting_out_of_range_is_refused_with_its_variable() {
         (SHARE_PERCENT_VARIABLE, "0"),
         (SHARE_PERCENT_VARIABLE, "101"),
         (SHARE_PERCENT_VARIABLE, "half"),
+        (LIVE_RATIO_PERCENT_VARIABLE, "0"),
         (LOSS_TIMEOUT_MS_VARIABLE, "0"),
         (QUEUE_TARGET_MS_VARIABLE, "0"),
         (BASE_RTT_WINDOW_S_VARIABLE, "0"),
