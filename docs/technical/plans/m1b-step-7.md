@@ -42,6 +42,7 @@ numbers.
    public key removed from the list. Every path and key is a setting.
 6. **Replay**: a sliding window over the nonce, per session and per direction. Rekeying is a
    later step: write it in `roadmap.md`, do not build it.
+7. **Plaintext**: v0 kept behind an explicit setting, encrypted by default (below).
 
 ## Proposed design (to confirm on the bench)
 
@@ -83,13 +84,12 @@ numbers.
   (`zero_allocations` tests, with encryption on). A packet that fails to decrypt costs one AEAD
   check and is dropped, never answered.
 
-## Open (ask Emilien before building)
+## Plaintext mode (Emilien, 2026-11-24)
 
-- **Encryption off.** Steps 5 and 6 proved "off is the previous step to the bit". Here, is
-  plaintext v0 kept as a setting (lab comparisons, debugging), or is v1 the only freewheel wire
-  format once this step is merged? Recommendation: keep v0 behind an explicit setting, off by
-  default in the binaries, so the bench can measure what encryption costs and the step 6 digest
-  test still holds with it off.
+v0 in clear stays, behind an explicit setting (`FREEWHEEL_PLAINTEXT=1`, both sides), off by
+default: the binaries encrypt unless told otherwise. So the bench can measure what encryption
+costs, and `tests/freewheel_recording_off.rs` still proves that plaintext is step 6 to the bit.
+A side in one mode refuses the other's packets; the lab passes the setting through.
 
 ## Bench
 
