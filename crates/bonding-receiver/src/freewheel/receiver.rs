@@ -3,8 +3,8 @@
 use std::net::SocketAddrV4;
 
 use bonding_protocol::freewheel::{
-    Ack, BackgroundPayload, CloseReason, Data, Envelope, HandshakeMessage, Header,
-    MAX_DATAGRAM_LEN, Packet, Sealed, SequenceRange, TrafficClass, WELCOME_MESSAGE_LEN,
+    Ack, BackgroundPayload, CloseReason, Data, Envelope, HELLO_MESSAGE_LEN, HandshakeMessage,
+    Header, MAX_DATAGRAM_LEN, Packet, Sealed, SequenceRange, TrafficClass, WELCOME_MESSAGE_LEN,
 };
 use freewheel_noise::{HandshakeError, OpenError, ServerKeys, read_hello};
 
@@ -229,7 +229,7 @@ impl Receiver {
         let Ok(transport) = read.welcome(keys, &mut welcome) else {
             return;
         };
-        let mut hello_bytes = [0u8; bonding_protocol::freewheel::HELLO_MESSAGE_LEN];
+        let mut hello_bytes = [0u8; HELLO_MESSAGE_LEN];
         hello_bytes.copy_from_slice(hello.message);
         let index = match index {
             Some(index) => index,

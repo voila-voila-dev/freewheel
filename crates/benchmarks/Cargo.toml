@@ -16,6 +16,7 @@ bonding-protocol = { path = "../bonding-protocol" }
 bonding-receiver = { path = "../bonding-receiver" }
 bonding-sender = { path = "../bonding-sender" }
 bitrate-control = { path = "../bitrate-control" }
+freewheel-noise = { path = "../freewheel-noise" }
 
 [dev-dependencies]
 alloc-counter = { path = "../alloc-counter" }

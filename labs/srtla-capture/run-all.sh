@@ -12,6 +12,8 @@
 #   RECORDING=1 (with transport/transport) uploads a recording too, at RECORDING_BPS, drained for
 #   RECORDING_DRAIN_S; every FREEWHEEL_RECORDING_* variable goes to the sender and the receiver
 #   (README, "Recording upload").
+#   Our transport encrypts, with keys made per run; FREEWHEEL_PLAINTEXT=1 runs it in clear,
+#   FREEWHEEL_CIPHER and FREEWHEEL_REPLAY_WINDOW_PACKETS go to both sides (README, "Encryption").
 set -euo pipefail
 
 lab=$(cd "$(dirname "$0")" && pwd)
@@ -38,7 +40,7 @@ mkdir -p "$out/runs" "$root/.cache/lab-target"
 docker run --rm -v "$root:/src" -w /src -v freewheel-cargo-registry:/usr/local/cargo/registry \
 	-e CARGO_TARGET_DIR=/src/.cache/lab-target rust:1.94.0-slim-trixie \
 	sh -c "apt-get update -qq && apt-get install --yes -qq --no-install-recommends libx264-dev > /dev/null \
-		&& cargo build --quiet --release --locked -p bonding-receiver -p bonding-sender -p h264-encoder \
+		&& cargo build --quiet --release --locked -p bonding-receiver -p bonding-sender -p freewheel-noise -p h264-encoder \
 		&& cargo build --quiet --release --locked -p packet-capture --bin frame-times --bin recording-check"
 mounts=(-v "$root/.cache/lab-target/release:/opt/freewheel:ro")
 
@@ -66,6 +68,8 @@ mounts+=(-v "$root/.cache/traces:/opt/traces:ro")
 # The recording's settings, and the sender's and receiver's FREEWHEEL_RECORDING_* the caller set,
 # go to the lab (not the recording's path and the copies' directory: the lab sets those).
 recording_variables=(-e RECORDING="${RECORDING:-0}" -e RECORDING_BPS="${RECORDING_BPS:-}" -e RECORDING_DRAIN_S="${RECORDING_DRAIN_S:-}")
+# Encryption's settings (lib/processes.sh): the keys are the lab's, the rest is the caller's.
+recording_variables+=(-e FREEWHEEL_PLAINTEXT="${FREEWHEEL_PLAINTEXT:-0}" -e FREEWHEEL_CIPHER="${FREEWHEEL_CIPHER:-}" -e FREEWHEEL_REPLAY_WINDOW_PACKETS="${FREEWHEEL_REPLAY_WINDOW_PACKETS:-}")
 while read -r variable; do
 	recording_variables+=(-e "$variable")
 done < <(env | sed -n 's/^\(FREEWHEEL_RECORDING_[A-Z_]*\)=.*/\1/p' | grep -vx FREEWHEEL_RECORDING_DIR)

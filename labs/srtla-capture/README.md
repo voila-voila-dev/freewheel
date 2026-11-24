@@ -137,6 +137,26 @@ deleted. Marks: `recording 1 started …`, `recording 1 written <bytes> bytes` (
 then `recording 1 delivered` or `recording 1 drain over`, and `recording 1 compared: …`.
 `LabRun` reads them: `recording` and `recording_whole_after_s`.
 
+### Encryption (M1b step 7)
+
+With `SENDER=transport RECEIVER=transport`, our transport encrypts (wire format v1,
+`docs/technical/protocol/freewheel.md`, "Wire format v1"), as the binaries do by default. Each run
+makes its keys with `freewheel-keygen` (built and mounted by `run-all.sh`) in
+`/tmp/freewheel-keys`: a server key, one key per sender (up to 4), and the senders' public keys in
+the receiver's authorised list. A bare run needs nothing. Mark: `keys made`.
+
+| Variable | What | Default |
+|---|---|---|
+| `FREEWHEEL_PLAINTEXT` | `1`: both sides in clear (v0), no keys | `0` |
+| `FREEWHEEL_CIPHER` | `chacha20poly1305` or `aes256gcm`, both sides | `chacha20poly1305` |
+| `FREEWHEEL_REPLAY_WINDOW_PACKETS` | the receiver's replay window per session, in packets | `8192` |
+
+The sender gets `FREEWHEEL_PRIVATE_KEY=/tmp/freewheel-keys/box.<s>.key` and
+`FREEWHEEL_SERVER_PUBLIC_KEY=/tmp/freewheel-keys/server.key.pub`, the receiver
+`FREEWHEEL_PRIVATE_KEY=/tmp/freewheel-keys/server.key` and
+`FREEWHEEL_AUTHORIZED_KEYS=/tmp/freewheel-keys/authorized`. A side in one mode reads nothing of
+the other's: `FREEWHEEL_PLAINTEXT` goes to both.
+
 ### Frame times and latency
 
 `frame-times` (`crates/packet-capture`, built for Linux by `run-all.sh` and mounted with ours)

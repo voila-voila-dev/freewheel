@@ -33,8 +33,8 @@ Our own protocol from the box to our server. SRTLA stays as a compatibility mode
 ## Wire format v0
 
 Implemented in `crates/bonding-protocol/src/freewheel/` (pure, `no_std`, no allocation).
-Big-endian everywhere. A datagram is at most 1 500 bytes. v0 has no encryption yet: Noise
-(M1b step 7) will wrap everything after the header.
+Big-endian everywhere. A datagram is at most 1 500 bytes. v0 is in clear: since M1b step 7 it
+runs only behind `FREEWHEEL_PLAINTEXT=1`, and v1 (below) seals it.
 
 ### Header (12 bytes, every packet)
 
@@ -90,6 +90,98 @@ benchmark `recording_chunk_decode` keeps it allocation-free.
 The packet layer still treats data payloads as opaque, so a receiver without a recording counts,
 acknowledges and drops background data as before, whatever it holds. With a recording, ACKs
 carry the ranges of the recording chunks received (below, "Recording upload").
+
+## Wire format v1 (M1b step 7)
+
+v0 sealed: every packet authenticated, every payload encrypted (goal 5). Framing in
+`bonding_protocol::freewheel` (`Envelope`, `frame_sealed`; pure, `no_std`); everything that
+touches a key in `crates/freewheel-noise`. Encrypted by default, both sides; a side in one mode
+drops the other's packets unanswered.
+
+### Sealed packet (every packet after the handshake)
+
+| Bytes | Field | Notes |
+|---|---|---|
+| 0 | magic `0xF1` | `F` for freewheel, `1` for the version; SRT, SRTLA and v0 told apart on this byte as before |
+| 1–11 | kind, link id, class, session id | as v0, in clear: the server routes on them before decrypting |
+| 12–19 | nonce | 64 bits, one counter per session and direction, shared by every link, from 0 after each handshake |
+| 20 – n−17 | the v0 packet after its header, encrypted | |
+| n−16 – n−1 | tag | 16 bytes |
+
+Bytes 0–19 are the AEAD's associated data: an altered kind, link, class, session id or nonce
+fails the tag like an altered payload. The AEAD is Noise's `CipherState` with associated data:
+ChaCha20-Poly1305 (default) or AES-256-GCM (`FREEWHEEL_CIPHER`), nonce = 32 zero bits and the
+counter (little-endian for ChaChaPoly, big-endian for AESGCM, Noise §12). 24 bytes per packet:
+the largest payload goes from 1 480 to 1 456 bytes, the largest recording chunk from 1 471 to
+1 447 (the sender clamps `CHUNK_BYTES`). A sealed packet's length follows from its kind's v0
+length (+ 24): anything else is refused before any decryption.
+
+### Handshake: Noise `IK`, one round trip
+
+| Kind | Name | Length | After the header (class 0) |
+|---|---|---|---|
+| `0x07` | Hello | 116 | IK's first message (`e, es, s, ss`): the box's ephemeral key, its static key encrypted, the payload encrypted (104 bytes) |
+| `0x08` | Welcome | 60 | IK's second (`e, ee, se`): the server's ephemeral key, an empty payload's tag (48 bytes) |
+
+`Noise_IK_25519_ChaChaPoly_BLAKE2s` (or `_AESGCM_`), through `snow`; prologue `freewheel v1` +
+the session id, so a hello replayed under another session id fails. The hello's payload is its
+handshake number in the session (64 bits, from 1). The box knows the server's static public key
+(`FREEWHEEL_SERVER_PUBLIC_KEY`), so the session opens in the round trip Join / Accept took in v0:
+
+- **Box.** The first housekeeping starts the handshake; the same hello goes on every open link,
+  and again unchanged every 250 ms until a welcome comes (any welcome on any link opens the
+  session; each welcome accepts its link). A welcome that does not authenticate changes nothing.
+  Links that join later (or whose hello was lost) send a sealed Join, answered by a sealed
+  Accept: only the session's holder can add links. If nothing from the server has opened for
+  3 s, the box starts a new handshake (number + 1): the server may have lost the session (a
+  restart), and it cannot say so in a way the box could trust.
+- **Server.** A hello that does not authenticate, or from a key not on
+  `FREEWHEEL_AUTHORIZED_KEYS`: dropped unanswered, no state kept. A session id belongs to the box
+  key that opened it: another key's hello for it is refused. A copy of the session's current
+  hello (another link, a retry after a lost welcome) is answered with the same welcome, cached,
+  and its link registered; a hello with a higher number opens the session again with new keys
+  (the links stay); a lower or equal one is a replay, dropped. Each side keeps the previous keys
+  until a packet opens with the new ones, so what was in flight still opens.
+- **Replay window.** Per session and direction, a bitmap over the latest nonces (8 192 by
+  default, 500 ms at 196 Mbit/s of full datagrams; `FREEWHEEL_REPLAY_WINDOW_PACKETS` on the
+  server), allocated once: a nonce below the window or seen already is dropped and counted. Links
+  reorder, so nonces may come in any order within it. Checked before the tag, marked after.
+- **Costs.** A forged sealed packet costs one AEAD check; a forged hello two X25519 operations
+  (IK's static key is encrypted, so the box is known only after them). Nothing allocates per
+  packet; a handshake allocates (`snow`).
+- **Not done.** Rekeying within a session (a later step, `roadmap.md`); keys are read once, at
+  start.
+
+Keys: one static pair per box, one for the server, made by `freewheel-keygen PATH` (the private
+key in `PATH`, mode 0600, the public key in `PATH.pub` and printed; `--force` to replace one).
+A private key others may read is refused. Resetting a box: a new pair, its new public key in the
+server's list, the old one out. The authorised list: one key per line, a name after it allowed,
+`#` comments.
+
+Tests: `bonding-protocol` `tests/freewheel_envelope.rs` (layouts, lengths per kind, framing) and
+`tests/envelope_fuzz.rs` (the v0 method: every input up to 2 bytes, every kind × class at every
+boundary length, 2 million mutations in release); `freewheel-noise` `tests/handshake.rs`,
+`transport.rs`, `replay_window.rs`, `key_files.rs`, `zero_allocations.rs`; `bonding-sender`
+`tests/freewheel_encryption.rs` on the simulated network (one round trip, a lost hello on one
+link, lost welcomes, an unknown box, a wrong server key, mixed modes, another box claiming the
+session, replayed and altered packets, reordering across links, the recording byte for byte, a
+server restart, an outage longer than the re-handshake), `freewheel_zero_allocations.rs`
+encrypted; `freewheel_recording_off.rs` still proves the clear wire is step 5's to the bit.
+
+**CPU** (benchmarks `freewheel_encrypt_chacha20poly1305`, `freewheel_encrypt_aes256gcm`: one
+full datagram sealed then opened, measured by `bun run bench` in instructions per packet; the
+ROCK 5T's numbers come in M3). On an Apple M-series laptop, 2026-11-24: ChaCha20-Poly1305
+7.3 µs per datagram (both ends), AES-256-GCM 24 µs. On aarch64 the RustCrypto crates use the CPU's
+instructions only when built with `--cfg aes_armv8 --cfg polyval_armv8 --cfg chacha20_force_neon`:
+then 6.3 µs and 2.2 µs. Not set yet: whether the box builds with them goes with M3's choice of the
+default cipher. At the lab's 3 Mbit/s live and 6 Mbit/s recording (~900 datagrams/s), ChaCha costs
+each side about 0.3 % of a core.
+
+**Lab, one local run** (2026-11-24, encrypted, recording on; indicative, CI decides):
+`all-links-drop` 2518 kbit/s intact, 189 frames lost, recording whole 5 s after the stream (step 6,
+CI: 2538, 186); `link-drop` 3035 kbit/s, 1 frame lost (3056); `receiver-restart` 163 frames lost,
+a 5.2 s gap, the same in clear (163, 5.3 s): the box opens the session again 3 s into the
+silence, while the server is back after 1.3 s.
 
 ## First candidate (M1b step 3)
 

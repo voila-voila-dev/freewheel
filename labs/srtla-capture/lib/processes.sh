@@ -79,6 +79,38 @@ case "$RECORDING_BPS$RECORDING_DRAIN_S" in
 		;;
 esac
 
+# Encryption (M1b step 7, README "Encryption"): our transport encrypts by default. Each run makes a
+# server key and one key per sender (freewheel-keygen, in $KEYS_DIR), lists the senders' public
+# keys for the receiver, and gives each side its files; FREEWHEEL_PLAINTEXT=1 runs both in clear,
+# FREEWHEEL_CIPHER and FREEWHEEL_REPLAY_WINDOW_PACKETS pass through. A bare run needs nothing.
+readonly KEYGEN=/opt/freewheel/freewheel-keygen
+readonly KEYS_DIR=/tmp/freewheel-keys
+# Senders a scenario may start (two-senders.sh starts two): each gets its key, all are authorised.
+readonly MAX_SENDERS=4
+FREEWHEEL_PLAINTEXT=${FREEWHEEL_PLAINTEXT:-0}
+case "$FREEWHEEL_PLAINTEXT" in
+	0 | 1) ;;
+	*)
+		echo "unknown FREEWHEEL_PLAINTEXT=$FREEWHEEL_PLAINTEXT (0 or 1)" >&2
+		exit 2
+		;;
+esac
+FREEWHEEL_CIPHER=${FREEWHEEL_CIPHER:-}
+FREEWHEEL_REPLAY_WINDOW_PACKETS=${FREEWHEEL_REPLAY_WINDOW_PACKETS:-}
+
+# make_keys: the run's keys, once (the receiver and every sender share $KEYS_DIR).
+make_keys() {
+	if [ -s "$KEYS_DIR/authorized" ]; then return; fi
+	mkdir -p "$KEYS_DIR"
+	"$KEYGEN" --force "$KEYS_DIR/server.key" > /dev/null
+	: > "$KEYS_DIR/authorized.new"
+	for sender in $(seq 1 "$MAX_SENDERS"); do
+		echo "$("$KEYGEN" --force "$KEYS_DIR/box.$sender.key") sender-$sender" >> "$KEYS_DIR/authorized.new"
+	done
+	mv "$KEYS_DIR/authorized.new" "$KEYS_DIR/authorized"
+	mark "keys made"
+}
+
 # The listener's output goes through frame-times (when mounted), which appends it to
 # <scenario>.ts and dates each frame as it is delivered: <scenario>.received.times.
 start_srt_listener() {
@@ -101,9 +133,16 @@ stop_srt_listener() {
 }
 
 start_receiver() {
-	local copies=""
+	local copies="" private_key="" authorized=""
 	if recording_on; then copies=$RECORDING_COPY_DIR; fi
-	FREEWHEEL_RECORDING_DIR="$copies" \
+	if [ "${RECEIVER:-upstream}" = transport ] && [ "$FREEWHEEL_PLAINTEXT" = 0 ]; then
+		make_keys
+		private_key=$KEYS_DIR/server.key
+		authorized=$KEYS_DIR/authorized
+	fi
+	FREEWHEEL_RECORDING_DIR="$copies" FREEWHEEL_PLAINTEXT="$FREEWHEEL_PLAINTEXT" \
+		FREEWHEEL_PRIVATE_KEY="$private_key" FREEWHEEL_AUTHORIZED_KEYS="$authorized" \
+		FREEWHEEL_CIPHER="$FREEWHEEL_CIPHER" FREEWHEEL_REPLAY_WINDOW_PACKETS="$FREEWHEEL_REPLAY_WINDOW_PACKETS" \
 		in_server "$RECEIVER_PROGRAM" "$SRTLA_PORT" 127.0.0.1 "$SRT_LISTENER_PORT" 2>> "$OUT/$SCENARIO.receiver.log" &
 	sleep 0.3
 	mark "receiver started"
@@ -129,8 +168,13 @@ start_sender() {
 	local sender=$1
 	shift
 	write_sender_ips "$sender" "$@"
-	local max_video_bps="" audio_bps="" recording=""
+	local max_video_bps="" audio_bps="" recording="" private_key="" server_key=""
 	if recording_on; then recording=$(recording_path "$sender"); fi
+	if [ "${SENDER:-upstream}" = transport ] && [ "$FREEWHEEL_PLAINTEXT" = 0 ]; then
+		make_keys
+		private_key=$KEYS_DIR/box.$sender.key
+		server_key=$KEYS_DIR/server.key.pub
+	fi
 	if [ "$ENCODER" = adaptive ]; then
 		max_video_bps=$(bitrate_bps "$BITRATE")
 		audio_bps=$AUDIO_BPS
@@ -139,7 +183,9 @@ start_sender() {
 		status=0
 		FREEWHEEL_CAPACITY_SOCKET="$CAPACITY_SOCKET_PREFIX.$sender.sock" \
 			FREEWHEEL_MAX_VIDEO_BPS="$max_video_bps" FREEWHEEL_AUDIO_BPS="$audio_bps" \
-			FREEWHEEL_RECORDING="$recording" \
+			FREEWHEEL_RECORDING="$recording" FREEWHEEL_PLAINTEXT="$FREEWHEEL_PLAINTEXT" \
+			FREEWHEEL_PRIVATE_KEY="$private_key" FREEWHEEL_SERVER_PUBLIC_KEY="$server_key" \
+			FREEWHEEL_CIPHER="$FREEWHEEL_CIPHER" \
 			in_box "$SENDER_PROGRAM" "$((6000 + sender))" "$RECEIVER_IP" "$SRTLA_PORT" "/tmp/srtla_ips.$sender" \
 			>> "$OUT/$SCENARIO.sender.$sender.log" 2>&1 || status=$?
 		mark "sender $sender exited with $status"
