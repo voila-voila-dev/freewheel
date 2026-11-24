@@ -15,6 +15,7 @@ use bonding_receiver::freewheel::{
 use bonding_sender::freewheel::{
     IoFailure, LinkHandle, ProbeTarget, RecordingSettings, Sender, SenderIo,
 };
+use freewheel_noise::{AuthorizedKeys, BoxKeys, Cipher, KeyPair, ServerKeys};
 
 /// Where the receiver listens.
 pub const RECEIVER: SocketAddrV4 = SocketAddrV4::new(Ipv4Addr::new(10, 200, 0, 1), 5_000);
@@ -58,6 +59,8 @@ struct SimLink {
     up: bool,
     /// Its uplink loses everything (netem's `loss 100%`); the way back still works.
     uplink_lost: bool,
+    /// Its downlink loses everything; the way there still works.
+    downlink_lost: bool,
     busy_until_us: u64,
     data_packets: u64,
     live_packets: u64,
@@ -192,6 +195,11 @@ pub struct Network {
     next_report_us: u64,
     /// FNV-1a over every datagram either side sent, with when and on which link.
     wire_digest: u64,
+    /// The server's keys once encrypted, to restart the receiver with them.
+    server_keys: Option<ServerKeys>,
+    /// Datagrams the receiver got, with their link, once [`capture_uplink`](Self::capture_uplink)
+    /// is on.
+    captured: Option<Vec<(usize, Vec<u8>)>>,
 }
 
 fn source(link: usize) -> Ipv4Addr {
@@ -227,6 +235,7 @@ impl Network {
                     spec: *spec,
                     up: true,
                     uplink_lost: false,
+                    downlink_lost: false,
                     busy_until_us: 0,
                     data_packets: 0,
                     live_packets: 0,
@@ -244,7 +253,68 @@ impl Network {
             reports: None,
             next_report_us: 0,
             wire_digest: FNV_OFFSET_BASIS,
+            server_keys: None,
+            captured: None,
         }
+    }
+
+    /// Fresh keys for a box and a server that trust each other, sealing with `cipher`.
+    pub fn keys(cipher: Cipher) -> (BoxKeys, ServerKeys) {
+        let (Ok(box_pair), Ok(server_pair)) = (KeyPair::generate(), KeyPair::generate()) else {
+            unreachable!("the system has randomness")
+        };
+        let mut box_keys = BoxKeys::new(box_pair.private, server_pair.public);
+        box_keys.cipher = cipher;
+        let mut server_keys = ServerKeys::new(
+            server_pair.private,
+            AuthorizedKeys::new(vec![box_pair.public]),
+        );
+        server_keys.cipher = cipher;
+        (box_keys, server_keys)
+    }
+
+    /// Encrypts both sides with fresh keys that trust each other (before anything runs).
+    pub fn enable_encryption(&mut self, cipher: Cipher) {
+        let (box_keys, server_keys) = Self::keys(cipher);
+        self.enable_encryption_with(box_keys, server_keys);
+    }
+
+    /// Encrypts both sides with these keys (before anything runs).
+    pub fn enable_encryption_with(&mut self, box_keys: BoxKeys, server_keys: ServerKeys) {
+        self.sender.enable_encryption(box_keys);
+        self.receiver.enable_encryption(server_keys.clone());
+        self.server_keys = Some(server_keys);
+    }
+
+    /// The server restarts: a new receiver, with the same keys, that knows no session.
+    pub fn restart_receiver(&mut self) {
+        self.receiver = Receiver::new();
+        if let Some(keys) = &self.server_keys {
+            self.receiver.enable_encryption(keys.clone());
+        }
+    }
+
+    /// Keeps every datagram the receiver gets from now on ([`captured`](Self::captured)).
+    pub fn capture_uplink(&mut self) {
+        self.captured = Some(Vec::new());
+    }
+
+    /// The datagrams the receiver got since [`capture_uplink`](Self::capture_uplink), with
+    /// their link.
+    pub fn captured(&self) -> &[(usize, Vec<u8>)] {
+        self.captured.as_deref().unwrap_or_default()
+    }
+
+    /// Hands the receiver `datagram` as if it came on `link`, now (an attacker on the path).
+    pub fn inject_to_receiver(&mut self, link: usize, datagram: &[u8]) {
+        self.receiver_side.now_us = self.now_us;
+        self.receiver.handle_link_datagram(
+            self.now_us,
+            source_address(link),
+            datagram,
+            &mut self.receiver_side,
+        );
+        self.flush(self.now_us);
     }
 
     /// Turns the sender's capacity probing on, and takes a capacity report every 100 ms as
@@ -358,6 +428,13 @@ impl Network {
         }
     }
 
+    /// Makes a link's downlink lose everything sent on it, or stop losing; its way there works.
+    pub fn set_downlink_lost(&mut self, link: usize, lost: bool) {
+        if let Some(sim) = self.links.get_mut(link) {
+            sim.downlink_lost = lost;
+        }
+    }
+
     /// Changes a link's uplink rate.
     pub fn set_rate(&mut self, link: usize, rate_bps: u64) {
         if let Some(sim) = self.links.get_mut(link) {
@@ -434,6 +511,9 @@ impl Network {
     fn deliver(&mut self, at_us: u64, delivery: Delivery) {
         match delivery {
             Delivery::ToReceiver { link, datagram } => {
+                if let Some(captured) = &mut self.captured {
+                    captured.push((link, datagram.clone()));
+                }
                 self.receiver_side.now_us = at_us;
                 self.receiver.handle_link_datagram(
                     at_us,
@@ -511,7 +591,7 @@ impl Network {
             let Some(sim) = self.links.get(link) else {
                 continue;
             };
-            if !sim.up {
+            if !sim.up || sim.downlink_lost {
                 continue;
             }
             let at_us = now_us + sim.spec.delay_us;

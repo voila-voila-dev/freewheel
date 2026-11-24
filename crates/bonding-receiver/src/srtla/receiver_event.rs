@@ -19,6 +19,10 @@ pub enum Refusal {
     NoRandomness,
     /// The answer (REG2 or REG3) could not be sent.
     AnswerNotSent,
+    /// freewheel, encrypted: a hello from a box whose key is not on the authorised list.
+    UnknownBox,
+    /// freewheel, encrypted: a hello for a session another box's key opened.
+    SessionTaken,
 }
 
 /// Why a group was removed.

@@ -10,6 +10,11 @@
 //! With `FREEWHEEL_RECORDING=<path>`, it uploads that recording on the links' spare capacity
 //! (the background class); every number of the upload is a `FREEWHEEL_RECORDING_*` variable
 //! (`bonding_sender::freewheel::RecordingSettings`). Without it, no upload.
+//!
+//! Encrypted by default (wire format v1): `FREEWHEEL_PRIVATE_KEY` (the box's key file),
+//! `FREEWHEEL_SERVER_PUBLIC_KEY` (the server's public key file), `FREEWHEEL_CIPHER`
+//! (`bonding_sender::freewheel::EncryptionSettings`). `FREEWHEEL_PLAINTEXT=1`: v0 in clear,
+//! no key.
 
 use std::net::{Ipv4Addr, UdpSocket};
 use std::path::PathBuf;
@@ -17,7 +22,7 @@ use std::process::ExitCode;
 use std::sync::atomic::AtomicBool;
 
 use bitrate_control::ControllerSettings;
-use bonding_sender::freewheel::{ProbeTarget, RecordingSettings, Sender};
+use bonding_sender::freewheel::{EncryptionSettings, ProbeTarget, RecordingSettings, Sender};
 use bonding_sender::server::{
     CapacityOutput, FREEWHEEL_WAKE_INTERVAL, RecordingFile, SenderConfig, UdpIo, random_session_id,
     read_source_list, serve_freewheel,
@@ -53,8 +58,14 @@ fn run(arguments: &[String]) -> Result<(), String> {
         .receivers
         .first()
         .ok_or_else(|| "no address for the receiver".to_owned())?;
+    let encryption = EncryptionSettings::from_environment(|name| std::env::var(name).ok())
+        .map_err(|error| error.to_string())?;
     let mut io = UdpIo::new(listen);
     let mut sender = Sender::new(session_id, receiver);
+    if let Some(settings) = &encryption {
+        let keys = settings.read_keys().map_err(|error| error.to_string())?;
+        sender.enable_encryption(keys);
+    }
     if sender.reload_sources(&sources, &mut io) == 0 {
         return Err(format!(
             "no IPv4 address in {}",
@@ -85,8 +96,12 @@ fn run(arguments: &[String]) -> Result<(), String> {
         io = io.with_recording(RecordingFile::new(settings.path.clone()));
     }
     eprintln!(
-        "freewheel-sender: SRT on port {}, receiver at {receiver}{}{}{}",
+        "freewheel-sender: SRT on port {}, receiver at {receiver}, {}{}{}{}",
         config.listen_port,
+        encryption.as_ref().map_or_else(
+            || "in clear".to_owned(),
+            |settings| format!("encrypted ({})", settings.cipher.name())
+        ),
         capacity_path
             .as_deref()
             .map(|path| format!(", capacity to {}", path.display()))

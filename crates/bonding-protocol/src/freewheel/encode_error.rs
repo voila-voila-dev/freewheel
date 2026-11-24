@@ -15,4 +15,6 @@ pub enum EncodeError {
     },
     /// A recording chunk without bytes, which no receiver would read.
     EmptyChunk,
+    /// What should be sealed is not an encoded v0 packet.
+    NotPlain,
 }

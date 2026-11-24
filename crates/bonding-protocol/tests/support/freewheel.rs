@@ -92,3 +92,31 @@ pub fn assert_background_canonical(bytes: &[u8]) {
         assert_eq!(encode_background(&payload), bytes, "{payload:?}");
     }
 }
+
+/// Encodes a v1 envelope into a fresh buffer of exactly its length.
+pub fn encode_envelope(envelope: &bonding_protocol::freewheel::Envelope<'_>) -> Vec<u8> {
+    let mut out = vec![0u8; envelope.encoded_len()];
+    let Ok(len) = envelope.encode(&mut out) else {
+        unreachable!("buffer sized from encoded_len")
+    };
+    assert_eq!(len, out.len());
+    out
+}
+
+/// Asserts the core property on one v1 datagram: if it decodes, it encodes back to itself.
+pub fn assert_envelope_canonical(bytes: &[u8]) {
+    if let Ok(envelope) = bonding_protocol::freewheel::Envelope::decode(bytes) {
+        assert_eq!(envelope.encoded_len(), bytes.len(), "{envelope:?}");
+        assert_eq!(encode_envelope(&envelope), bytes, "{envelope:?}");
+    }
+}
+
+/// The sealed layout of an encoded v0 packet, its encrypted part left in clear and its tag
+/// zero: what [`frame_sealed`](bonding_protocol::freewheel::frame_sealed) writes.
+pub fn framed(plain: &[u8], nonce: u64) -> Vec<u8> {
+    let mut out = [0u8; MAX_DATAGRAM_LEN];
+    let Ok(len) = bonding_protocol::freewheel::frame_sealed(plain, nonce, &mut out) else {
+        unreachable!("{} bytes fit sealed", plain.len())
+    };
+    out[..len].to_vec()
+}

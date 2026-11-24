@@ -4,9 +4,11 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 
 use bitrate_control::CapacityReport;
 use bonding_protocol::freewheel::{
-    BackgroundPayload, CloseReason, DATA_HEADER_LEN, Data, Header, MAX_DATA_PAYLOAD_LEN,
-    MAX_DATAGRAM_LEN, MAX_RECORDING_CHUNK_LEN, Packet, RecordingChunk, SessionId, TrafficClass,
+    BackgroundPayload, CloseReason, DATA_HEADER_LEN, Data, Envelope, HandshakeMessage, Header,
+    MAX_DATA_PAYLOAD_LEN, MAX_DATAGRAM_LEN, MAX_RECORDING_CHUNK_LEN, Packet, RecordingChunk,
+    SessionId, TrafficClass,
 };
+use freewheel_noise::BoxKeys;
 
 use super::limits::{
     HOUSEKEEPING_PERIOD_US, JOIN_RETRY_US, KEEPALIVE_IDLE_US, MAX_EXPECTED_ARRIVAL_US,
@@ -19,6 +21,7 @@ use super::probe::{PROBE_GAIN, ProbeTarget, Probing};
 use super::recording_settings::RecordingSettings;
 use super::recording_upload::RecordingUpload;
 use super::spare_window::SpareWindowSettings;
+use super::wire::{BoxSecurity, Incoming, PacketBytes, Wire};
 use crate::srtla::{LinkHandle, SenderEvent, SenderIo};
 
 /// What the outside world may know about one link (for the event loop and tests).
@@ -42,10 +45,12 @@ pub struct FreewheelLinkStatus {
 ///
 /// Feed it every datagram with the time in microseconds of a monotonic clock, and call
 /// [`housekeeping`](Self::housekeeping) at least every [`HOUSEKEEPING_PERIOD_US`]. It only
-/// allocates when the link list changes.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// allocates when the link list changes (and, encrypted, when a handshake starts).
+#[derive(Debug)]
 pub struct Sender {
     session_id: SessionId,
+    /// In clear, or encrypted ([`enable_encryption`](Self::enable_encryption)).
+    wire: Wire,
     receiver: SocketAddrV4,
     links: Vec<Link>,
     next_handle: u64,
@@ -94,6 +99,7 @@ impl Sender {
     pub const fn new(session_id: SessionId, receiver: SocketAddrV4) -> Self {
         Self {
             session_id,
+            wire: Wire::Plain,
             receiver,
             links: Vec::new(),
             next_handle: 0,
@@ -125,12 +131,46 @@ impl Sender {
         }
     }
 
+    /// Speaks wire format v1 (M1b step 7): housekeeping opens the session with a Noise `IK`
+    /// handshake to the server `keys.server` names (a hello on every open link, answered with
+    /// a welcome), then every packet is sealed with the session's keys, and only what opens
+    /// with them is read. Payloads shrink by 24 bytes (nonce and tag). Call it before
+    /// [`enable_recording`](Self::enable_recording), which sizes its chunks for the wire.
+    /// Without this, v0 in clear (`FREEWHEEL_PLAINTEXT=1`).
+    pub fn enable_encryption(&mut self, keys: BoxKeys) {
+        self.wire = Wire::Sealed(Box::new(BoxSecurity::new(keys, self.session_id)));
+    }
+
+    /// Encrypted: datagrams from the receiver dropped so far because they did not open
+    /// (replays, forgeries, welcomes for another hello). 0 in clear.
+    #[must_use]
+    pub fn rejected_packets(&self) -> u64 {
+        match &self.wire {
+            Wire::Plain => 0,
+            Wire::Sealed(security) => security.rejected_packets,
+        }
+    }
+
+    /// Encrypted: `true` once a handshake has opened the session. Always `true` in clear.
+    #[must_use]
+    pub fn session_open(&self) -> bool {
+        match &self.wire {
+            Wire::Plain => true,
+            Wire::Sealed(security) => security.is_open(),
+        }
+    }
+
     /// Uploads the recording `io` reads ([`SenderIo::recording_bytes`],
     /// [`SenderIo::read_recording`]) in the background class (`recording_upload.rs`): its
     /// chunks take the place of capacity probing's padding, and fill the room the live
     /// traffic leaves in each link's congestion window
     /// ([`fill_spare_capacity`](Self::fill_spare_capacity)).
     pub fn enable_recording(&mut self, settings: &RecordingSettings) {
+        let mut settings = settings.clone();
+        settings.chunk_bytes = settings
+            .chunk_bytes
+            .min(self.wire.max_recording_chunk_len());
+        let settings = &settings;
         self.recording = Some(RecordingUpload::new(settings));
         self.spare_shares = SpareShares {
             share_percent: settings.share_percent,
@@ -181,6 +221,7 @@ impl Sender {
         }
         let (session_id, receiver) = (self.session_id, self.receiver);
         let recording = &mut self.recording;
+        let wire = &mut self.wire;
         self.links.retain(|link| {
             let kept = sources.contains(&link.source);
             if !kept {
@@ -195,7 +236,7 @@ impl Sender {
                         },
                         reason: CloseReason::Done,
                     };
-                    send_packet(io, link.handle, receiver, &close);
+                    send_packet(io, wire, link.handle, receiver, &close);
                     io.close_link(link.handle);
                 }
                 io.report(SenderEvent::LinkRemoved {
@@ -230,10 +271,10 @@ impl Sender {
         io: &mut impl SenderIo,
     ) {
         self.srt_caller = Some(from);
-        if datagram.len() > MAX_DATA_PAYLOAD_LEN {
+        if datagram.len() > self.wire.max_data_payload_len() {
             return;
         }
-        let size_bytes = (datagram.len() + MAX_DATAGRAM_LEN - MAX_DATA_PAYLOAD_LEN) as u64;
+        let size_bytes = (DATA_HEADER_LEN + self.wire.overhead_bytes() + datagram.len()) as u64;
         let Some((index, arrival_us)) = self.choose_link(now_us, size_bytes) else {
             self.traffic.dropped_bytes += size_bytes;
             return;
@@ -254,7 +295,7 @@ impl Sender {
             sent_at_us: wrapped_us(now_us),
             payload: datagram,
         });
-        if !send_packet(io, link.handle, receiver, &packet) {
+        if !send_packet(io, &mut self.wire, link.handle, receiver, &packet) {
             stall(
                 link,
                 now_us,
@@ -328,7 +369,11 @@ impl Sender {
         datagram: &[u8],
         io: &mut impl SenderIo,
     ) {
-        let Ok(packet) = Packet::decode(datagram) else {
+        let mut opened = [0u8; MAX_DATAGRAM_LEN];
+        let Some(plain) = self.read_wire(now_us, datagram, &mut opened, io) else {
+            return;
+        };
+        let Ok(packet) = Packet::decode(plain) else {
             return;
         };
         if packet.header().session_id != self.session_id {
@@ -420,17 +465,45 @@ impl Sender {
                 // The ACK freed room on that link: the upload's chunks are clocked by them.
                 self.fill_spare_capacity(now_us, io);
             }
-            Packet::Close { .. } => {
-                if let Some(link) = self.links.iter_mut().find(|l| l.handle == link) {
-                    link.joined = false;
-                    link.last_join_us = None;
-                    link.in_flight.clear();
-                    if let Some(upload) = &mut self.recording {
-                        upload.on_link_lost(link.id);
-                    }
-                }
-            }
+            Packet::Close { .. } => self.on_close(link),
             Packet::Keepalive { .. } | Packet::Join(_) => {}
+        }
+    }
+
+    /// The receiver closed `link` (or does not know it): it joins again.
+    fn on_close(&mut self, link: LinkHandle) {
+        if let Some(link) = self.links.iter_mut().find(|l| l.handle == link) {
+            link.joined = false;
+            link.last_join_us = None;
+            link.in_flight.clear();
+            if let Some(upload) = &mut self.recording {
+                upload.on_link_lost(link.id);
+            }
+        }
+    }
+
+    /// The v0 packet a datagram from the receiver carries, through the wire: itself in clear,
+    /// opened into `opened` when encrypted. A welcome opens the session and accepts its link.
+    fn read_wire<'a>(
+        &mut self,
+        now_us: u64,
+        datagram: &'a [u8],
+        opened: &'a mut [u8],
+        io: &mut impl SenderIo,
+    ) -> Option<&'a [u8]> {
+        match self
+            .wire
+            .incoming(now_us, self.session_id, datagram, opened)
+        {
+            Incoming::Packet(PacketBytes::Datagram) => Some(datagram),
+            Incoming::Packet(PacketBytes::Opened(len)) => opened.get(..len),
+            Incoming::Welcome(link_id) => {
+                if let Some(link) = self.link_by_id(link_id) {
+                    accept(link, now_us, io);
+                }
+                None
+            }
+            Incoming::Dropped => None,
         }
     }
 
@@ -445,6 +518,10 @@ impl Sender {
         }
         self.last_housekeeping_us = Some(now_us);
         let (session_id, receiver) = (self.session_id, self.receiver);
+        let mut hello = None;
+        if let Wire::Sealed(security) = &mut self.wire {
+            hello = security.hello(now_us).copied();
+        }
         for link in &mut self.links {
             let header = Header {
                 session_id,
@@ -460,13 +537,29 @@ impl Sender {
                 }
                 continue;
             }
-            if !link.joined {
-                if link
-                    .last_join_us
-                    .is_none_or(|at_us| at_us + JOIN_RETRY_US <= now_us)
-                {
+            let join_due = link
+                .last_join_us
+                .is_none_or(|at_us| at_us + JOIN_RETRY_US <= now_us);
+            // Encrypted, while a handshake waits for its welcome: the same hello on every open
+            // link, joined or not (opening the session again, the receiver may have lost it).
+            if let Some(message) = &hello {
+                if join_due {
                     link.last_join_us = Some(now_us);
-                    send_packet(io, link.handle, receiver, &Packet::Join(header));
+                    send_hello(io, link.handle, receiver, header, message);
+                }
+                if !link.joined {
+                    continue;
+                }
+            } else if !link.joined {
+                if join_due {
+                    link.last_join_us = Some(now_us);
+                    send_packet(
+                        io,
+                        &mut self.wire,
+                        link.handle,
+                        receiver,
+                        &Packet::Join(header),
+                    );
                 }
                 continue;
             }
@@ -491,7 +584,7 @@ impl Sender {
                     header,
                     sent_at_us: wrapped_us(now_us),
                 };
-                if send_packet(io, link.handle, receiver, &keepalive) {
+                if send_packet(io, &mut self.wire, link.handle, receiver, &keepalive) {
                     link.last_sent_us = now_us;
                 }
             }
@@ -556,8 +649,16 @@ impl Sender {
                 session_id,
                 link_id: link.id,
             };
-            let sent = match send_chunk(io, link.handle, receiver, header, sequence, now_us, upload)
-            {
+            let sent = match send_chunk(
+                io,
+                &mut self.wire,
+                link.handle,
+                receiver,
+                header,
+                sequence,
+                now_us,
+                upload,
+            ) {
                 ChunkSent::Sent(sent) => sent,
                 ChunkSent::NothingToSend => return,
                 ChunkSent::Failed => {
@@ -694,6 +795,7 @@ impl Sender {
                 };
                 let Some(sent) = send_background(
                     io,
+                    &mut self.wire,
                     link.handle,
                     receiver,
                     header,
@@ -854,8 +956,10 @@ enum ChunkSent {
 }
 
 /// Sends the recording's next chunk as `sequence`, if one is ready and can be read.
+#[allow(clippy::too_many_arguments)]
 fn send_chunk(
     io: &mut impl SenderIo,
+    wire: &mut Wire,
     link: LinkHandle,
     receiver: SocketAddrV4,
     header: Header,
@@ -868,7 +972,7 @@ fn send_chunk(
     let Some(chunk) = upload.next_chunk(now_us) else {
         return ChunkSent::NothingToSend;
     };
-    let Some(bytes) = bytes.get_mut(..chunk.len) else {
+    let Some(bytes) = bytes.get_mut(..chunk.len.min(wire.max_recording_chunk_len())) else {
         return ChunkSent::NothingToSend;
     };
     if io.read_recording(chunk.offset, bytes).is_err() {
@@ -889,11 +993,11 @@ fn send_chunk(
         sent_at_us: wrapped_us(now_us),
         payload: body,
     });
-    if !send_packet(io, link, receiver, &packet) {
+    if !send_packet(io, wire, link, receiver, &packet) {
         return ChunkSent::Failed;
     }
     upload.on_sent(chunk, sequence, header.link_id, now_us);
-    ChunkSent::Sent((DATA_HEADER_LEN + body.len()) as u64)
+    ChunkSent::Sent((DATA_HEADER_LEN + wire.overhead_bytes() + body.len()) as u64)
 }
 
 /// One background datagram that left: its size on the wire, and whether it was padding.
@@ -904,8 +1008,10 @@ struct BackgroundSent {
 
 /// Sends one background datagram as `sequence`: the recording's next chunk when there is one
 /// to send and it can be read, else padding. `None` if the send failed.
+#[allow(clippy::too_many_arguments)]
 fn send_background(
     io: &mut impl SenderIo,
+    wire: &mut Wire,
     link: LinkHandle,
     receiver: SocketAddrV4,
     header: Header,
@@ -913,7 +1019,9 @@ fn send_background(
     now_us: u64,
     recording: Option<&mut RecordingUpload>,
 ) -> Option<BackgroundSent> {
-    match recording.map(|upload| send_chunk(io, link, receiver, header, sequence, now_us, upload)) {
+    match recording
+        .map(|upload| send_chunk(io, wire, link, receiver, header, sequence, now_us, upload))
+    {
         Some(ChunkSent::Sent(size_bytes)) => {
             return Some(BackgroundSent {
                 size_bytes,
@@ -928,9 +1036,11 @@ fn send_background(
         class: TrafficClass::Background,
         sequence,
         sent_at_us: wrapped_us(now_us),
-        payload: &PADDING,
+        payload: PADDING
+            .get(..wire.max_data_payload_len())
+            .unwrap_or_default(),
     });
-    send_packet(io, link, receiver, &packet).then_some(BackgroundSent {
+    send_packet(io, wire, link, receiver, &packet).then_some(BackgroundSent {
         size_bytes: PADDING_DATAGRAM_BYTES,
         padding: true,
     })
@@ -992,17 +1102,36 @@ fn stall(
     io.report(event);
 }
 
-/// Encodes and sends one packet on a link; `false` if it did not leave whole.
+/// Encodes and sends one packet on a link, through the wire (sealed when encrypted); `false`
+/// if it did not leave whole.
 fn send_packet(
     io: &mut impl SenderIo,
+    wire: &mut Wire,
     link: LinkHandle,
     receiver: SocketAddrV4,
     packet: &Packet<'_>,
 ) -> bool {
-    let mut out = [0u8; MAX_DATAGRAM_LEN];
+    let mut plain = [0u8; MAX_DATAGRAM_LEN];
+    let mut sealed = [0u8; MAX_DATAGRAM_LEN];
     packet
-        .encode(&mut out)
+        .encode(&mut plain)
         .ok()
-        .and_then(|len| out.get(..len))
+        .and_then(|len| plain.get(..len))
+        .and_then(|plain| wire.outgoing(plain, &mut sealed))
         .is_some_and(|datagram| io.send_on_link(link, receiver, datagram).is_ok())
+}
+
+/// Sends the handshake's hello on a link, as is (the handshake message is its own protection).
+fn send_hello(
+    io: &mut impl SenderIo,
+    link: LinkHandle,
+    receiver: SocketAddrV4,
+    header: Header,
+    message: &[u8],
+) {
+    let mut out = [0u8; MAX_DATAGRAM_LEN];
+    let hello = Envelope::Hello(HandshakeMessage { header, message });
+    if let Some(datagram) = hello.encode(&mut out).ok().and_then(|len| out.get(..len)) {
+        let _ = io.send_on_link(link, receiver, datagram);
+    }
 }

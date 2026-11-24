@@ -17,6 +17,7 @@ path = "src/bin/freewheel_sender.rs"
 [dependencies]
 bitrate-control = { path = "../bitrate-control" }
 bonding-protocol = { path = "../bonding-protocol" }
+freewheel-noise = { path = "../freewheel-noise" }
 net-sys = { path = "../net-sys" }
 
 [dev-dependencies]

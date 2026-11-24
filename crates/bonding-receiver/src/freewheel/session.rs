@@ -5,10 +5,11 @@ use bonding_protocol::freewheel::{LinkId, SessionId};
 use super::limits::MAX_LINKS_PER_SESSION;
 use super::link::Link;
 use super::recent_chunks::RecentChunks;
+use super::session_security::SessionSecurity;
 use crate::srtla::GroupHandle;
 
 /// One sender's stream and the links carrying it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct Session {
     pub(crate) id: SessionId,
     pub(crate) handle: GroupHandle,
@@ -22,6 +23,8 @@ pub struct Session {
     pub(crate) empty_since_us: u64,
     /// The recording chunks it received last, for its ACKs (empty without a recording).
     pub(crate) recent_chunks: RecentChunks,
+    /// Encrypted: its handshake and keys (`None` in clear).
+    pub(crate) security: Option<Box<SessionSecurity>>,
 }
 
 impl Session {
@@ -42,6 +45,7 @@ impl Session {
             next_sequence: 0,
             empty_since_us: now_us,
             recent_chunks: RecentChunks::new(acknowledged_ranges),
+            security: None,
         }
     }
 

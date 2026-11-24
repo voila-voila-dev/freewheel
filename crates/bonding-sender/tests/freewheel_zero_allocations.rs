@@ -1,6 +1,6 @@
 //! The freewheel per-packet path allocates nothing, on either side, capacity reports for the
-//! encoder included, and with capacity probing and the recording upload on: the count does
-//! not grow with traffic.
+//! encoder included, with capacity probing and the recording upload on, and encrypted: the
+//! count does not grow with traffic.
 
 use std::net::{Ipv4Addr, SocketAddrV4};
 
@@ -15,6 +15,7 @@ use bonding_receiver::freewheel::{
 use bonding_sender::freewheel::{
     IoFailure, LinkHandle, ProbeTarget, RecordingSettings, Sender, SenderIo,
 };
+use freewheel_noise::{AuthorizedKeys, BoxKeys, KeyPair, ServerKeys};
 
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
@@ -165,12 +166,23 @@ fn handle_of(sender: &Sender, link: u64) -> Option<LinkHandle> {
 }
 
 /// Streams `packets` SRT packets; with `recording`, probing runs and carries a recording that
-/// grows 1 kB per packet. Returns the SRT bytes delivered both ways, and the recording bytes.
-fn stream(packets: u32, recording: bool) -> (usize, usize) {
+/// grows 1 kB per packet; `encrypted`, both sides seal. Returns the SRT bytes delivered both
+/// ways, and the recording bytes.
+fn stream(packets: u32, recording: bool, encrypted: bool) -> (usize, usize) {
     let mut to_receiver = Mailbox::new();
     let mut to_sender = Mailbox::new();
     let mut sender = Sender::new(42, RECEIVER);
     let mut receiver = Receiver::new();
+    if encrypted {
+        let (Ok(box_pair), Ok(server_pair)) = (KeyPair::generate(), KeyPair::generate()) else {
+            unreachable!("the system has randomness")
+        };
+        sender.enable_encryption(BoxKeys::new(box_pair.private, server_pair.public));
+        receiver.enable_encryption(ServerKeys::new(
+            server_pair.private,
+            AuthorizedKeys::new(vec![box_pair.public]),
+        ));
+    }
     if recording {
         sender.enable_probing(ProbeTarget {
             stream_max_wire_bps: 50_000_000,
@@ -228,25 +240,32 @@ fn stream(packets: u32, recording: bool) -> (usize, usize) {
 
 #[test]
 fn freewheel_allocates_nothing_per_packet() {
-    let ((small_bytes, _), small) = count_allocations(|| stream(1_000, false));
-    let ((large_bytes, _), large) = count_allocations(|| stream(100_000, false));
-    assert!(small_bytes > 0 && large_bytes > small_bytes);
-    assert_eq!(
-        small, large,
-        "{small} allocations for 1k packets, {large} for 100k"
-    );
+    for encrypted in [false, true] {
+        let ((small_bytes, _), small) = count_allocations(|| stream(1_000, false, encrypted));
+        let ((large_bytes, _), large) = count_allocations(|| stream(100_000, false, encrypted));
+        assert!(
+            small_bytes > 0 && large_bytes > small_bytes,
+            "encrypted: {encrypted}"
+        );
+        assert_eq!(
+            small, large,
+            "encrypted: {encrypted}, {small} allocations for 1k packets, {large} for 100k"
+        );
+    }
 }
 
 #[test]
 fn the_recording_upload_allocates_nothing_per_chunk() {
-    let ((_, small_copied), small) = count_allocations(|| stream(1_000, true));
-    let ((_, large_copied), large) = count_allocations(|| stream(100_000, true));
-    assert!(
-        small_copied > 0 && large_copied > small_copied,
-        "the recording went: {small_copied}, {large_copied} bytes"
-    );
-    assert_eq!(
-        small, large,
-        "{small} allocations for 1k packets, {large} for 100k"
-    );
+    for encrypted in [false, true] {
+        let ((_, small_copied), small) = count_allocations(|| stream(1_000, true, encrypted));
+        let ((_, large_copied), large) = count_allocations(|| stream(100_000, true, encrypted));
+        assert!(
+            small_copied > 0 && large_copied > small_copied,
+            "encrypted: {encrypted}, the recording went: {small_copied}, {large_copied} bytes"
+        );
+        assert_eq!(
+            small, large,
+            "encrypted: {encrypted}, {small} allocations for 1k packets, {large} for 100k"
+        );
+    }
 }

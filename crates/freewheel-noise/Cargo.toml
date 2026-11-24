@@ -1,0 +1,27 @@
+[package]
+name = "freewheel-noise"
+description = "freewheel's cryptography (M1b step 7): the Noise IK handshake, sealing and opening packets, the replay window and key files, from audited crates only"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "freewheel-keygen"
+path = "src/bin/freewheel_keygen.rs"
+
+# `decisions.md`, 2026-11-24: `snow` for the handshake (Trail of Bits review, 2024), its own
+# AEAD crates for the transport (NCC Group review, 2020), at the versions `snow` uses, so one
+# copy of each is built. `risky-raw-split` hands over the handshake's two keys: `snow`'s
+# transport cannot authenticate our clear header as associated data.
+[dependencies]
+aes-gcm = { workspace = true }
+bonding-protocol = { path = "../bonding-protocol" }
+chacha20poly1305 = { workspace = true }
+snow = { workspace = true }
+
+[dev-dependencies]
+alloc-counter = { path = "../alloc-counter" }
+
+[lints]
+workspace = true

@@ -5,12 +5,17 @@
 //! (the background class) there; its other numbers are `FREEWHEEL_RECORDING_*` variables
 //! (`bonding_receiver::freewheel::RecordingSettings`). Without it, background data is counted,
 //! acknowledged and dropped.
+//!
+//! Encrypted by default (wire format v1): `FREEWHEEL_PRIVATE_KEY` (the server's key file),
+//! `FREEWHEEL_AUTHORIZED_KEYS` (the boxes' public keys, one per line), `FREEWHEEL_CIPHER`,
+//! `FREEWHEEL_REPLAY_WINDOW_PACKETS` (`bonding_receiver::freewheel::EncryptionSettings`).
+//! `FREEWHEEL_PLAINTEXT=1`: v0 in clear, no key.
 
 use std::net::{Ipv4Addr, UdpSocket};
 use std::process::ExitCode;
 use std::sync::atomic::AtomicBool;
 
-use bonding_receiver::freewheel::RecordingSettings;
+use bonding_receiver::freewheel::{EncryptionSettings, RecordingSettings};
 use bonding_receiver::server::{
     FREEWHEEL_WAKE_INTERVAL, RecordingWriter, ServerConfig, UdpIo, serve_freewheel,
 };
@@ -36,6 +41,24 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    let encryption = match EncryptionSettings::from_environment(|name| std::env::var(name).ok()) {
+        Ok(encryption) => encryption,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(2);
+        }
+    };
+    let keys = match encryption
+        .as_ref()
+        .map(EncryptionSettings::read_keys)
+        .transpose()
+    {
+        Ok(keys) => keys,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(2);
+        }
+    };
     let listen = match UdpSocket::bind((Ipv4Addr::UNSPECIFIED, config.listen_port)) {
         Ok(socket) => socket,
         Err(error) => {
@@ -44,9 +67,18 @@ fn main() -> ExitCode {
         }
     };
     eprintln!(
-        "freewheel-receiver: listening on {}, forwarding to SRT at {}{}",
+        "freewheel-receiver: listening on {}, forwarding to SRT at {}, {}{}",
         config.listen_port,
         config.srt_address,
+        keys.as_ref().map_or_else(
+            || "in clear".to_owned(),
+            |keys| format!(
+                "encrypted ({}, {} authorised boxes, replay window {} packets)",
+                keys.cipher.name(),
+                keys.authorized.len(),
+                keys.replay_window_packets
+            )
+        ),
         recording
             .as_ref()
             .map(|settings| format!(", recording {settings:?}"))
@@ -67,6 +99,7 @@ fn main() -> ExitCode {
         FREEWHEEL_WAKE_INTERVAL,
         &AtomicBool::new(false),
         recording.as_ref(),
+        keys,
     ) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {

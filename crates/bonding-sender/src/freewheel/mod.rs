@@ -8,6 +8,7 @@
 mod base_rtt;
 mod chunk_window;
 mod chunks_in_flight;
+mod encryption_settings;
 mod in_flight;
 mod limits;
 mod link;
@@ -19,12 +20,17 @@ mod recording_upload;
 mod sender;
 mod setting_error;
 mod spare_window;
+mod wire;
 
+pub use encryption_settings::{
+    CIPHER_VARIABLE, EncryptionSettings, PLAINTEXT_VARIABLE, PRIVATE_KEY_VARIABLE,
+    SERVER_PUBLIC_KEY_VARIABLE,
+};
 pub use in_flight::InFlight;
 pub use limits::{
     HOUSEKEEPING_PERIOD_US, IN_FLIGHT_CAPACITY, INITIAL_RTT_US, JOIN_RETRY_US, KEEPALIVE_IDLE_US,
     MIN_CONGESTION_WINDOW_BYTES, MIN_RATE_BPS, OPEN_RETRY_US, RATE_SAMPLE_PERIOD_US, RATE_SAMPLES,
-    STALL_MIN_US, STALL_RTT_MULTIPLE,
+    REHANDSHAKE_SILENCE_US, STALL_MIN_US, STALL_RTT_MULTIPLE,
 };
 pub use link_estimate::LinkEstimate;
 pub use probe::{

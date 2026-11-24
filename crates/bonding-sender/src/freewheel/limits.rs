@@ -2,8 +2,14 @@
 
 /// Housekeeping (joins, keepalives, stall checks) runs at most this often.
 pub const HOUSEKEEPING_PERIOD_US: u64 = 10_000;
-/// A link not accepted yet sends a join this often.
+/// A link not accepted yet sends a join this often (encrypted: the hello, while the handshake
+/// waits for its welcome).
 pub const JOIN_RETRY_US: u64 = 250_000;
+/// Encrypted, the box opens the session again (a new handshake) when nothing from the receiver
+/// has opened for this long: the receiver may have lost the session (a restart), and nothing
+/// it does not know can be answered. Every link heard nothing for three times the longest
+/// stall (`STALL_MAX_US`); idle links hear an ACK every 50 ms.
+pub const REHANDSHAKE_SILENCE_US: u64 = 3_000_000;
 /// A link whose socket could not be opened is retried this often (SRTLA mode: every second).
 pub const OPEN_RETRY_US: u64 = 1_000_000;
 /// A link that sent nothing for this long sends a keepalive, so its RTT stays measured and a
