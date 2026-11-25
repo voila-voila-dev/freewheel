@@ -201,6 +201,18 @@ judged without it (the bench runs ours with and without it, `labs/srtla-capture/
 2913–3040 kbit/s intact, median 3000, the recording whole 1–2 s later than at 100 %), and 0 holds
 the whole upload for after the live.
 
+**Done: CI run 45492621563** (3 runs, medians, encrypted). Without the upload, against the
+baseline: intact video `all-links-drop` 2538 kbit/s (2434), `burst-loss` 3083 (3042), `link-drop`
+3056 (3028; restored link 50 %, against 13 %), `real-ride` 2955 (2964; 13 frames lost against 57),
+`trace-city` 3043 (3022), `trace-drive` 2052 (1034; 182 frames lost against 1773),
+`varying-bandwidth` 3046 (3024): step 6's level, latency p99 unchanged. With the upload on (75 %),
+the recording whole in every run of every scenario (`all-links-drop`, `burst-loss`, `link-drop`
+3 s after the stream, `trace-city` 25 s, `varying-bandwidth` 26 s, `real-ride` 73 s, `trace-drive`
+144 s), the live as without it but `varying-bandwidth` 3013 and `trace-drive` 2137. The lab reads
+sealed packets from their clear header: a live data packet counts on its link (the restored link's
+share), its SRT number, encrypted, no longer ties a lost frame to a link (`LossCauses`' link down).
+The share above is from that run's captures, read with this.
+
 ## First candidate (M1b step 3)
 
 `freewheel-sender` and `freewheel-receiver` (crates `bonding-sender` and `bonding-receiver`,

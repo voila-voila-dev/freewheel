@@ -279,7 +279,12 @@ fn uplink_data(path: &Path) -> Result<Vec<SentPacket>, LabRunError> {
         .filter_map(|datagram| {
             let sequence = match freewheel::Packet::decode(datagram.payload) {
                 Ok(freewheel::Packet::Data(data)) => data.sequence,
-                _ if freewheel::is_freewheel(datagram.payload) => return None,
+                // Sealed (v1), the sequence is encrypted: no link to tie a frame's loss to.
+                _ if freewheel::is_freewheel(datagram.payload)
+                    || freewheel::is_sealed(datagram.payload) =>
+                {
+                    return None;
+                }
                 _ => data_sequence_number(datagram.payload)?,
             };
             Some(SentPacket {

@@ -209,7 +209,7 @@ with exactly the encoder's bytes, over the stream's duration: what a viewer coul
 delivered bitrate (every byte the SRT listener wrote, damaged frames and audio included: for
 information only), encoder-to-server latency p50 / p99, and on `link-drop` the restored link's share of
 the data packets 15–25 s after it came back (from the box capture; our transport's packets are
-unwrapped to count their SRT data). Scenarios: `link-drop`, `burst-loss`,
+unwrapped to count their SRT data, or, sealed, counted as live data from their clear header). Scenarios: `link-drop`, `burst-loss`,
 `varying-bandwidth`, `all-links-drop`, `real-ride`, `trace-city`, `trace-drive`. Default pairs:
 the baseline (upstream ↔ upstream), our compatibility mode (Rust ↔ Rust) and irlserver; each
 candidate joins as one more pair. Median of the runs for every measure. `--gate` fails unless

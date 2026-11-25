@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::net::SocketAddrV4;
 
-use bonding_protocol::freewheel::{self, is_freewheel};
+use bonding_protocol::freewheel::{self, is_freewheel, is_sealed};
 use bonding_protocol::srtla::{ID_LEN, PacketType, classify, data_sequence_number, raw_type};
 
 use crate::{LinkStats, SrtlaEvent, UdpDatagram};
@@ -83,20 +83,24 @@ impl SrtlaReport {
         );
 
         // Our own transport (M1b) wraps each SRT packet: its data counts like SRTLA's, its
-        // control packets are not SRTLA's.
+        // control packets are not SRTLA's. Sealed (v1, M1b step 7), the SRT packet is encrypted:
+        // a live data packet still counts, from its clear header, without its SRT number.
+        if is_sealed(payload) {
+            if let Ok(freewheel::Envelope::Sealed(sealed)) = freewheel::Envelope::decode(payload)
+                && sealed.kind == freewheel::PacketKind::Data
+                && sealed.class == Some(freewheel::TrafficClass::Live)
+            {
+                count_data_packet(stats, at_ms, length);
+            }
+            return;
+        }
         let srt_packet = match freewheel::Packet::decode(payload) {
             Ok(freewheel::Packet::Data(data)) => data.payload,
             _ if is_freewheel(payload) => return,
             _ => payload,
         };
         if let Some(sequence_number) = data_sequence_number(srt_packet) {
-            stats.data_packets += 1;
-            stats.data_bytes += length as u64;
-            let second = usize::try_from(at_ms / MILLISECONDS_PER_SECOND).unwrap_or(usize::MAX);
-            if stats.data_packets_per_second.len() <= second {
-                stats.data_packets_per_second.resize(second + 1, 0);
-            }
-            stats.data_packets_per_second[second] += 1;
+            count_data_packet(stats, at_ms, length);
             self.sent_on
                 .entry(link)
                 .or_default()
@@ -286,4 +290,15 @@ fn summary(values: &[u64]) -> String {
     };
     let mean = values.iter().sum::<u64>() / values.len() as u64;
     format!("{} gaps, min {min}, mean {mean}, max {max}", values.len())
+}
+
+/// One more data packet on a link, `length` bytes on the wire, at `at_ms`.
+fn count_data_packet(stats: &mut LinkStats, at_ms: u64, length: usize) {
+    stats.data_packets += 1;
+    stats.data_bytes += length as u64;
+    let second = usize::try_from(at_ms / MILLISECONDS_PER_SECOND).unwrap_or(usize::MAX);
+    if stats.data_packets_per_second.len() <= second {
+        stats.data_packets_per_second.resize(second + 1, 0);
+    }
+    stats.data_packets_per_second[second] += 1;
 }
