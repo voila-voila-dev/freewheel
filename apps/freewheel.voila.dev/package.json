@@ -1,0 +1,20 @@
+{
+	"name": "freewheel.voila.dev",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "bun scripts/drive.ts && bunx --bun astro dev",
+		"build": "bun scripts/drive.ts && bunx --bun astro build",
+		"preview": "bunx --bun astro preview",
+		"deploy": "bun run build && bunx wrangler deploy",
+		"data": "bun scripts/drive.ts"
+	},
+	"dependencies": {
+		"@voila.dev/site": "^0.1.1",
+		"astro": "^7.4.13"
+	},
+	"devDependencies": {
+		"@astrojs/sitemap": "^3.7.6",
+		"wrangler": "^4.166.0"
+	}
+}

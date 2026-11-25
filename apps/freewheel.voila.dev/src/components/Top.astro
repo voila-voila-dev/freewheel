@@ -1,0 +1,8 @@
+---
+import Top from "@voila.dev/site/components/Top.astro";
+import { repo } from "../data/bench";
+import { links, siteName } from "../data/site";
+import Logo from "./Logo.astro";
+---
+
+<Top name={siteName} links={links} repo={repo}><Logo slot="logo" /></Top>

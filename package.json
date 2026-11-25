@@ -6,7 +6,9 @@
 	"packageManager": "bun@1.4.4",
 	"workspaces": {
 		"packages": [
-			"apps/*",
+			"apps/agent",
+			"apps/server",
+			"apps/web",
 			"packages/*",
 			"scripts/*"
 		],

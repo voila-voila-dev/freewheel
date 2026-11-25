@@ -1,0 +1,129 @@
+---
+import CodeBlock from "@voila.dev/site/components/CodeBlock.astro";
+import Cta from "../components/Cta.astro";
+import Footer from "../components/Footer.astro";
+import Top from "../components/Top.astro";
+import {
+	benchUrl,
+	compatibility,
+	repo,
+	restoredLink,
+	scenarios,
+	traceDrive,
+} from "../data/bench";
+import Base from "../layouts/Base.astro";
+
+const pad = (i: number) => String(i + 1).padStart(2, "0");
+const reproduce = `# reproduce it
+git clone ${repo}
+cd freewheel && bun install
+bun run traces:fetch   # public LTE traces
+bun run bench          # fails on a regression`;
+const ours = traceDrive.senders.find((s) => s.ours)!;
+const upstream = traceDrive.senders.find((s) => s.name === "SRTLA")!;
+const ratio = (upstream.framesLost / ours.framesLost).toFixed(1);
+const maxLost = Math.max(...traceDrive.senders.map((s) => s.framesLost));
+const thousands = (n: number) => n.toLocaleString("en-US");
+const steps = [
+	["Measure", "Every link, all the time: latency, throughput, loss."],
+	["Schedule", "Each packet goes on the link where it lands first."],
+	["Drop late video", "Never queue in the modem what would arrive too late."],
+	["Restore", "A silent link is out in under 1 s, back as soon as it answers."],
+];
+---
+
+<Base
+	title="freewheel benchmark · against SRTLA and irlserver"
+	description={`freewheel against BELABOX SRTLA and irlserver/srtla_send on real LTE traces: ${ratio}× fewer frames lost. Method, scenarios and raw results, gated in CI.`}
+>
+	<div class="in">
+		<Top />
+		<header class="phero solo"><h1>Benchmark</h1></header>
+		<div class="pintro">
+			<p>Same video, same networks, three senders.</p>
+			<div><span class="k">Against</span>SRTLA (BELABOX) · irlserver/srtla_send</div>
+			<div><span class="k">Runs</span>Every push, native ARM64 CI runner, median of 3</div>
+		</div>
+	</div>
+
+	<main class="in">
+		<section id="trace-drive">
+			<div class="head"><h2>On the road</h2><span>trace-drive · real LTE</span></div>
+			<div class="thousand">
+				<span class="n">{ratio}×</span>
+				<p>fewer frames lost than SRTLA, on real LTE uplinks recorded in a moving car.</p>
+			</div>
+
+			<div class="bars" role="table" aria-label="Frames lost or damaged on trace-drive">
+				<div class="bars-head" role="row">
+					<span role="columnheader">Sender</span><span role="columnheader">Frames lost or damaged, of ~{thousands(traceDrive.totalFrames)}</span><span role="columnheader" class="u">Delivered</span>
+				</div>
+				{
+					traceDrive.senders.map((s) => (
+						<div class:list={["bar", { ours: s.ours }]} role="row">
+							<span role="cell"><b>{s.name}</b><small>{s.detail}</small></span>
+							<span role="cell" class="track-bar">
+								<i style={`width:${(s.framesLost / maxLost) * 100}%`} />
+								<em>{thousands(s.framesLost)}</em>
+							</span>
+							<span role="cell" class="u">{s.deliveredMbps} Mbit/s</span>
+						</div>
+					))
+				}
+			</div>
+			<p class="note">
+				Three recorded LTE uplinks, 5.3 Mbit/s together on average, for a 3.4 Mbit/s stream. Median of 3 runs on a native ARM64 CI runner, frame by
+				frame, each received frame checked byte for byte against the sent one. irlserver from the baseline run of 2026-11-17.
+			</p>
+
+			<div class="figs">
+				<div><strong>{restoredLink[0].value}</strong><span class="k">traffic back on a restored link, 15–25 s after (SRTLA: {restoredLink[2].value})</span></div>
+				<div><strong>&lt;1 s</strong><span class="k">to drop a silent link</span></div>
+				<div><strong>0</strong><span class="k">allocations per packet on hot paths</span></div>
+				<div><strong>{scenarios.length}</strong><span class="k">lab scenarios, every push</span></div>
+			</div>
+		</section>
+
+		<section id="scenarios">
+			<div class="head"><h2>Scenarios</h2><span>The lab</span></div>
+			<div class="arch-grid bench-grid">
+				<div class="feat">
+					<div class="table">
+						{scenarios.map(([name, text], i) => <div class="row"><span class="n">{pad(i)}</span><b class="pkg">{name}</b><p>{text}</p></div>)}
+					</div>
+				</div>
+				<div>
+					<CodeBlock lang="sh" code={reproduce} />
+					<p class="note">
+						The CI fails if freewheel does worse than upstream on any scenario. Honest reading: emulated loss, bursts and a single dead link are hidden
+						by SRT's 2 s buffer for everyone. Real traces are where senders differ. <a href={benchUrl}>Full results ↗</a>
+					</p>
+				</div>
+			</div>
+		</section>
+
+		<section id="compat" class="feat">
+			<div class="head"><h2>Compatible</h2><span>SRTLA mode · drop-in</span></div>
+			<p class="claim lead">Swap <code>srtla_send</code> or <code>srtla_rec</code> for freewheel, keep the rest of your setup.</p>
+			<div class="table cmp">
+				<div class="row th"><span>No.</span><span>Measure</span><span>freewheel</span><span class="u">Upstream</span></div>
+				{compatibility.map(([name, a, b], i) => <div class="row"><span class="n">{pad(i)}</span><b>{name}</b><span>{a}</span><span class="u">{b}</span></div>)}
+			</div>
+		</section>
+
+		<section id="how">
+			<div class="head"><h2>How</h2><span>Own transport</span></div>
+			<div class="steps four">
+				{steps.map(([name, text], i) => <div><span class="n">{pad(i)}</span><b>{name}</b><p>{text}</p></div>)}
+			</div>
+			<div class="what-grid how-grid">
+				<div><span class="k">One port</span>A first byte <code>0xF0</code> tells freewheel packets from SRT and SRTLA.</div>
+				<div><span class="k">Sessions</span>A session ID, not an address: an IP that changes breaks nothing.</div>
+				<div><span class="k">Code</span>Rust where bytes flow, Bun + Effect where we orchestrate. Zero third-party crates.</div>
+			</div>
+		</section>
+
+		<Cta />
+	</main>
+	<div class="in"><Footer /></div>
+</Base>

@@ -1,0 +1,40 @@
+---
+// How much data a live uses: bitrate × time, split across the SIMs. Same rule of thumb as the
+// guide (docs/guide/concepts/data-plans.md): one hour at 2.5 Mbit/s is about 1.1 GB.
+---
+
+<div class="budget" data-budget>
+	<label><span class="k">Stream <em data-out="rate"></em></span><input type="range" min="1" max="12" step="0.5" value="2.5" data-in="rate" /></label>
+	<label><span class="k">Live per day <em data-out="hours"></em></span><input type="range" min="0.5" max="10" step="0.5" value="3" data-in="hours" /></label>
+	<label><span class="k">Days <em data-out="days"></em></span><input type="range" min="1" max="60" step="1" value="30" data-in="days" /></label>
+	<label><span class="k">SIMs <em data-out="sims"></em></span><input type="range" min="1" max="4" step="1" value="3" data-in="sims" /></label>
+	<div class="figs">
+		<div><span class="k">In all</span><strong data-out="total"></strong></div>
+		<div><span class="k">Per SIM, even split</span><strong data-out="per"></strong></div>
+		<div><span class="k">Per hour</span><strong data-out="hour"></strong></div>
+	</div>
+</div>
+
+<script>
+	for (const root of document.querySelectorAll<HTMLElement>("[data-budget]")) {
+		const input = (k: string) => Number(root.querySelector<HTMLInputElement>(`[data-in="${k}"]`)!.value);
+		const out = (k: string, v: string) => {
+			root.querySelector(`[data-out="${k}"]`)!.textContent = v;
+		};
+		const gb = (v: number) => (v >= 100 ? `${Math.round(v)} GB` : `${v.toFixed(1)} GB`);
+		const update = () => {
+			const [rate, hours, days, sims] = ["rate", "hours", "days", "sims"].map(input);
+			const hour = (rate * 3600) / 8 / 1000;
+			const total = hour * hours * days;
+			out("rate", `${rate} Mbit/s`);
+			out("hours", `${hours} h`);
+			out("days", `${days}`);
+			out("sims", `${sims}`);
+			out("hour", gb(hour));
+			out("total", gb(total));
+			out("per", gb(total / sims));
+		};
+		root.addEventListener("input", update);
+		update();
+	}
+</script>

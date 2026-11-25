@@ -1,0 +1,34 @@
+---
+// The shell of every page: @voila.dev/site's Base, with freewheel's structured data and styles.
+import Shell from "@voila.dev/site/components/Base.astro";
+import { siteName } from "../data/site";
+import "../styles/freewheel.css";
+
+interface Props {
+	title: string;
+	description: string;
+	home?: boolean;
+}
+
+const { title, description, home = false } = Astro.props;
+
+const software = {
+	"@context": "https://schema.org",
+	"@type": "SoftwareSourceCode",
+	name: "freewheel",
+	description,
+	url: "https://freewheel.voila.dev",
+	codeRepository: "https://github.com/voila-voila-dev/freewheel",
+	programmingLanguage: ["Rust", "TypeScript"],
+	license: "https://opensource.org/licenses/MIT",
+	author: {
+		"@type": "Organization",
+		name: "Voila Development",
+		url: "https://voila.dev",
+	},
+};
+---
+
+<Shell title={title} description={description} siteName={siteName} jsonLd={home ? software : undefined}>
+	<slot />
+</Shell>
