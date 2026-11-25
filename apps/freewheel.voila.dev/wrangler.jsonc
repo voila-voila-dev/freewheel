@@ -1,0 +1,13 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "freewheel-voila-dev",
+	"account_id": "3d9e9632be236005903c677f4e571f62",
+	"compatibility_date": "2026-11-01",
+	// Static Astro build, no Worker code.
+	"assets": {
+		"directory": "./dist",
+		"html_handling": "drop-trailing-slash",
+		"not_found_handling": "404-page"
+	},
+	"routes": [{ "pattern": "freewheel.voila.dev", "custom_domain": true }]
+}

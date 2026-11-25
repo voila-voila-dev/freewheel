@@ -1,0 +1,218 @@
+---
+import Cta from "../components/Cta.astro";
+import Drive from "../components/Drive.astro";
+import Flow from "../components/Flow.astro";
+import Footer from "../components/Footer.astro";
+import Streamer from "../components/illustrations/Streamer.astro";
+import Viewer from "../components/illustrations/Viewer.astro";
+import Top from "../components/Top.astro";
+import { repo, roadmap, traceDrive } from "../data/bench";
+import Base from "../layouts/Base.astro";
+
+const pad = (i: number) => String(i + 1).padStart(2, "0");
+const ours = traceDrive.senders.find((s) => s.ours)!;
+const others = traceDrive.senders.filter((s) => !s.ours);
+const ratio = Math.floor(others[0].framesLost / ours.framesLost);
+const maxLost = Math.max(...traceDrive.senders.map((s) => s.framesLost));
+const statusLabel = { done: "Done", now: "Now", next: "Next" };
+const statusColor = { done: "#1fbf75", now: "#2633ff", next: "#b9b9b4" };
+const marquee = [
+	"Several SIMs, one stream",
+	"Keeps going in dead zones",
+	"Works with BELABOX",
+	"Open source",
+	"Self-hosted",
+];
+type Fix = {
+	pain: string;
+	fix: string;
+	status: "measured" | "built" | "coming";
+};
+const fixes: Fix[] = [
+	{
+		pain: "One network weakens, the stream freezes.",
+		fix: "Each packet takes the fastest network. 3× less video lost.",
+		status: "measured",
+	},
+	{
+		pain: "A network comes back but stays unused for a minute.",
+		fix: "Back to its full share within seconds.",
+		status: "measured",
+	},
+	{
+		pain: "Switching network or IP cuts the stream.",
+		fix: "The stream is tied to a session, not an address.",
+		status: "built",
+	},
+	{
+		pain: "A dead zone means footage lost forever.",
+		fix: "A full-quality copy uploads in the background and fills the gaps.",
+		status: "coming",
+	},
+	{
+		pain: "Your data plan melts.",
+		fix: "A budget per SIM. The cheap one goes first.",
+		status: "coming",
+	},
+	{
+		pain: "A long tunnel ends the session.",
+		fix: "The session waits for you, up to 15 minutes.",
+		status: "coming",
+	},
+	{
+		pain: "Your stream travels in the clear.",
+		fix: "Encrypted by default.",
+		status: "coming",
+	},
+	{
+		pain: "A new tool means a new setup.",
+		fix: "Speaks BELABOX. Keep your gear.",
+		status: "measured",
+	},
+];
+const builtFor = [
+	{
+		who: "Viewers",
+		promise: "A stream that just plays.",
+		points: [
+			"No freezes when a network dips.",
+			"The best picture your networks allow.",
+			"Full-quality replay, gaps filled (soon).",
+		],
+	},
+	{
+		who: "Streamers",
+		promise: "Nothing to babysit.",
+		points: [
+			"Plug in your SIMs, go live.",
+			"No switching networks by hand.",
+			"Ride, walk, explore. It keeps up.",
+		],
+	},
+];
+const fixStatus = {
+	measured: ["Measured", "#1fbf75"],
+	built: ["Built", "#2633ff"],
+	coming: ["Coming", "#b9b9b4"],
+};
+const how = [
+	["Plug in your SIMs", "Any carrier, any country."],
+	["Go live", "Video goes over every network."],
+	["That's it", "freewheel picks the best path."],
+];
+---
+
+<Base
+	home
+	title="freewheel · live streaming that doesn't drop"
+	description="freewheel is a live streaming protocol designed for the stream: smooth for viewers, effortless for IRL streamers. It combines your SIMs into one stream that keeps going when a network drops. Open source, self-hosted, compatible with BELABOX."
+>
+	<div class="in first-screen">
+		<Top />
+		<div class="hero">
+		<h1 class="word">freewheel</h1>
+		<Flow />
+		<div class="under">
+			<p>Go live anywhere. Never drop.</p>
+			<div><span class="k">For</span>IRL streamers</div>
+			<div><span class="k">Status</span>In development</div>
+		</div>
+		</div>
+	</div>
+
+	<div class="marquee" aria-hidden="true">
+		<div class="track">{[...marquee, ...marquee].map((name) => <span>{name}</span>)}</div>
+	</div>
+
+	<main class="in">
+		<section id="built-for">
+			<div class="head"><h2>Built for</h2><span>The stream, not the network</span></div>
+			<p class="claim lead">Streaming outside is a hassle. freewheel is a protocol built around the stream.</p>
+			<div class="duo">
+				{
+					builtFor.map((side) => (
+						<div>
+							{side.who === "Viewers" ? <Viewer /> : <Streamer />}
+							<span class="k">{side.who}</span>
+							<b>{side.promise}</b>
+							<ul>{side.points.map((point) => <li>{point}</li>)}</ul>
+						</div>
+					))
+				}
+			</div>
+		</section>
+
+		<section id="why">
+			<div class="head"><h2>Why</h2><span>What the new protocol fixes</span></div>
+			<div class="table fixes">
+				<div class="row th"><span>No.</span><span>The pain</span><span>freewheel</span><span class="u">Status</span></div>
+				{
+					fixes.map((f, i) => (
+						<div class="row">
+							<span class="n">{pad(i)}</span>
+							<p class="pain">{f.pain}</p>
+							<b>{f.fix}</b>
+							<span class="st u" style={`--s:${fixStatus[f.status][1]}`}>{fixStatus[f.status][0]}</span>
+						</div>
+					))
+				}
+			</div>
+		</section>
+
+		<section id="better">
+			<div class="head"><h2>Better</h2><span>Same video, same networks</span></div>
+			<div class="thousand">
+				<span class="n">{ratio}×</span>
+				<p>less video lost than BELABOX, on real roads.</p>
+			</div>
+			<div class="versus">
+				{
+					traceDrive.senders.map((s) => (
+						<div class:list={{ ours: s.ours }}>
+							<b>{s.name === "SRTLA" ? "BELABOX" : s.name}</b>
+							<span class="meter"><i style={`width:${100 - (s.framesLost / traceDrive.totalFrames) * 100}%`} /></span>
+							<span class="k">{Math.round(100 - (s.framesLost / traceDrive.totalFrames) * 100)} % delivered</span>
+						</div>
+					))
+				}
+			</div>
+			<a class="btn more" href="/benchmark">See the full benchmark →</a>
+		</section>
+
+		<section id="how">
+			<div class="head"><h2>How</h2><span>Three steps</span></div>
+			<div class="steps three">
+				{how.map(([name, text], i) => <div><span class="n">{pad(i)}</span><b>{name}</b><p>{text}</p></div>)}
+			</div>
+			<div class="badges">
+				<a class="badge" href={repo}><i aria-hidden="true"></i>100% open source · MIT</a>
+				<a class="badge" href={repo}><i aria-hidden="true"></i>Self-host your server</a>
+			</div>
+		</section>
+
+		<section id="demos">
+			<div class="head"><h2>Demos</h2><span>A real drive, three SIMs</span></div>
+			<Drive compact />
+			<a class="btn more" href="/demos">Try it, and more →</a>
+		</section>
+
+		<section id="roadmap">
+			<div class="head"><h2>Roadmap</h2><span>Done, now, next</span></div>
+			<div class="table road">
+				{
+					roadmap.map((m) => (
+						<div class="row">
+							<span class="n">{m.id}</span>
+							<b>{m.name}</b>
+							<p>{m.text}</p>
+							<span class="st" style={`--s:${statusColor[m.status]}`}>{statusLabel[m.status]}</span>
+						</div>
+					))
+				}
+			</div>
+		</section>
+
+		<Cta />
+	</main>
+	<div class="in"><Footer /></div>
+</Base>

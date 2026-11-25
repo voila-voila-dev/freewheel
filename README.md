@@ -35,6 +35,7 @@ Compatibility mode reproduces upstream exactly, quirks included; fixes come with
 | `apps/agent` | On-board agent (Bun + Effect, one ARM64 executable): network, modems, live supervisor, telemetry, tunnel | `belaUI` |
 | `apps/server` | Own server (Bun + Effect): telemetry ingest, outage scenes, bets, replays | BELABOX cloud |
 | `apps/web` | TanStack Router + Effect: the box's control panel and the server dashboard | belaUI front |
+| `apps/freewheel.voila.dev` | The site, [freewheel.voila.dev](https://freewheel.voila.dev): docs (this `docs/` folder), demos, benchmark. Its own install | — |
 | `packages/domain` | Pure domain shared by every app (DDD, Effect Schema): telemetry outbox, positions… | — |
 | `packages/typescript-config` | Shared TypeScript config | — |
 | `scripts/bench` | Measures and gates performance | — |
@@ -68,6 +69,7 @@ bun run bench        # size, instructions per packet, agent size, against the ba
 
 - **Users**: [`docs/guide/`](docs/guide/README.md), plain language, no technical background needed.
 - **Builders**: [`docs/technical/`](docs/technical/README.md): architecture, code style, emulator, benchmarks, roadmap, decisions.
+- Both are published on [freewheel.voila.dev/docs](https://freewheel.voila.dev/docs).
 
 ## License
 

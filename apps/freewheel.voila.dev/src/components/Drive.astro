@@ -1,0 +1,187 @@
+---
+// The drive: 100 s of three recorded LTE uplinks from a moving car (scripts/drive.ts), the same
+// window as the `trace-drive` bench. Pick SIMs and a bitrate; the playhead shows, second by
+// second, whether the stream fits on the best SIM alone and on the SIMs together.
+import drive from "../data/drive.json";
+
+interface Props {
+	compact?: boolean;
+}
+const { compact = false } = Astro.props;
+const colors = ["#2633ff", "#c9971c", "#1fbf75"];
+---
+
+<div class:list={["drive", { compact }]} data-drive={JSON.stringify(drive)} data-colors={colors.join(" ")}>
+	<div class="dctl">
+		<div class="sims">
+			<span class="k">SIMs</span>
+			{
+				drive.links.map((l, i) => (
+					<label class="sim" style={`--c:${colors[i]}`}>
+						<input type="checkbox" checked data-sim={i} />
+						<span>{l.name}</span>
+					</label>
+				))
+			}
+		</div>
+		<label class="rate">
+			<span class="k">Stream <em data-rate-label>3.4 Mbit/s</em></span>
+			<input type="range" min="500" max="8000" step="100" value="3400" data-rate aria-label="Stream bitrate" />
+		</label>
+		<button class="btn small" data-play>Pause</button>
+	</div>
+	<svg class="chart" viewBox="0 0 1000 260" preserveAspectRatio="none" role="img" aria-label="Uplink capacity per second">
+		<g data-areas></g>
+		<g data-frozen></g>
+		<line class="limit" data-limit x1="0" x2="1000"></line>
+		<line class="head" data-head y1="0" y2="260"></line>
+	</svg>
+	<div class="axis"><span>0 s</span><span>50 s</span><span>{drive.seconds} s</span></div>
+	<div class="screens">
+		<figure data-screen="alone">
+			<div class="screen"><span class="state" data-state>LIVE</span><span class="tc" data-tc>0 s</span></div>
+			<figcaption><b data-name>Best SIM alone</b><span data-fit>–</span></figcaption>
+		</figure>
+		<figure data-screen="bonded">
+			<div class="screen"><span class="state" data-state>LIVE</span><span class="tc" data-tc>0 s</span></div>
+			<figcaption><b>freewheel, together</b><span data-fit>–</span></figcaption>
+		</figure>
+	</div>
+	<p class="src">
+		Recorded LTE uplinks from a moving car (<a href="https://github.com/ravinet/mahimahi">Mahimahi</a>), the 100 s our bench
+		replays. This is capacity: what senders really deliver here is on the <a href="/benchmark">benchmark</a>.
+	</p>
+</div>
+
+<script>
+	type Drive = { seconds: number; links: { name: string; kbps: number[] }[] };
+	const W = 1000;
+	const H = 260;
+	const SVG = "http://www.w3.org/2000/svg";
+	/** One second of the drive per this many ms of playback. */
+	const STEP_MS = 200;
+
+	function mount(root: HTMLElement) {
+		const drive: Drive = JSON.parse(root.dataset.drive ?? "{}");
+		const colors = (root.dataset.colors ?? "").split(" ");
+		const n = drive.seconds;
+		const max = Math.max(...Array.from({ length: n }, (_, s) => drive.links.reduce((a, l) => a + l.kbps[s], 0)));
+		const top = Math.ceil(max / 1000) * 1000;
+		const x = (s: number) => (s / n) * W;
+		const y = (kbps: number) => H - (Math.min(kbps, top) / top) * H;
+		const $ = <T extends Element>(sel: string) => root.querySelector(sel) as T;
+		const sims = [...root.querySelectorAll<HTMLInputElement>("[data-sim]")];
+		const rate = $<HTMLInputElement>("[data-rate]");
+		const play = $<HTMLButtonElement>("[data-play]");
+		let second = 0;
+		let playing = true;
+
+		const selected = () => sims.filter((c) => c.checked).map((c) => Number(c.dataset.sim));
+		const sum = (ids: number[], s: number) => ids.reduce((a, i) => a + drive.links[i].kbps[s], 0);
+		const fits = (ids: number[], kbps: number) => Array.from({ length: n }, (_, s) => sum(ids, s) >= kbps);
+
+		function draw() {
+			const ids = selected();
+			const kbps = Number(rate.value);
+			$("[data-rate-label]").textContent = `${(kbps / 1000).toFixed(1)} Mbit/s`;
+			// Stacked areas, one per selected SIM.
+			const areas = $("[data-areas]");
+			areas.replaceChildren();
+			const base = new Array<number>(n).fill(0);
+			for (const i of ids) {
+				const upper = base.map((b, s) => b + drive.links[i].kbps[s]);
+				const pts = [
+					...upper.flatMap((v, s) => [`${x(s)},${y(v)}`, `${x(s + 1)},${y(v)}`]),
+					...base
+						.map((v, s) => [`${x(s + 1)},${y(v)}`, `${x(s)},${y(v)}`])
+						.reverse()
+						.flat(),
+				];
+				const poly = document.createElementNS(SVG, "polygon");
+				poly.setAttribute("points", pts.join(" "));
+				poly.setAttribute("fill", colors[i]);
+				areas.append(poly);
+				upper.forEach((v, s) => {
+					base[s] = v;
+				});
+			}
+			// Seconds where the stream does not fit on the selected SIMs together.
+			const frozen = $("[data-frozen]");
+			frozen.replaceChildren();
+			fits(ids, kbps).forEach((ok, s) => {
+				if (ok) return;
+				const r = document.createElementNS(SVG, "rect");
+				r.setAttribute("x", String(x(s)));
+				r.setAttribute("width", String(W / n));
+				r.setAttribute("y", String(H - 10));
+				r.setAttribute("height", "10");
+				frozen.append(r);
+			});
+			const limit = $("[data-limit]");
+			limit.setAttribute("y1", String(y(kbps)));
+			limit.setAttribute("y2", String(y(kbps)));
+			// The best SIM alone: the selected one the stream fits on most often.
+			const share = (ok: boolean[]) => ok.filter(Boolean).length / n;
+			const best = ids.map((i) => ({ i, ok: fits([i], kbps) })).sort((a, b) => share(b.ok) - share(a.ok))[0];
+			const alone = $<HTMLElement>('[data-screen="alone"]');
+			const bonded = $<HTMLElement>('[data-screen="bonded"]');
+			alone.querySelector("[data-name]")!.textContent = best ? `${drive.links[best.i].name} alone` : "No SIM";
+			const fitText = (ok: boolean[]) => `${Math.round(share(ok) * 100)} % live`;
+			alone.querySelector("[data-fit]")!.textContent = best ? fitText(best.ok) : "0 % live";
+			const together = fits(ids, kbps);
+			bonded.querySelector("[data-fit]")!.textContent = ids.length ? fitText(together) : "0 % live";
+			root.dataset.okAlone = best ? best.ok.map(Number).join("") : "0".repeat(n);
+			root.dataset.okBonded = ids.length ? together.map(Number).join("") : "0".repeat(n);
+			tick();
+		}
+
+		function tick() {
+			$("[data-head]").setAttribute("x1", String(x(second + 0.5)));
+			$("[data-head]").setAttribute("x2", String(x(second + 0.5)));
+			for (const [name, key] of [
+				["alone", "okAlone"],
+				["bonded", "okBonded"],
+			] as const) {
+				const screen = $<HTMLElement>(`[data-screen="${name}"]`);
+				const live = root.dataset[key]?.[second] === "1";
+				screen.classList.toggle("frozen", !live);
+				screen.querySelector("[data-state]")!.textContent = live ? "● LIVE" : "FROZEN";
+				screen.querySelector("[data-tc]")!.textContent = `${second} s`;
+			}
+		}
+
+		for (const c of sims) c.addEventListener("change", draw);
+		rate.addEventListener("input", draw);
+		play.addEventListener("click", () => {
+			playing = !playing;
+			play.textContent = playing ? "Pause" : "Play";
+		});
+		// Click or drag on the chart to move the playhead.
+		const chart = $<SVGSVGElement>(".chart");
+		const seek = (e: PointerEvent) => {
+			const box = chart.getBoundingClientRect();
+			second = Math.max(0, Math.min(n - 1, Math.floor(((e.clientX - box.left) / box.width) * n)));
+			tick();
+		};
+		chart.addEventListener("pointerdown", (e) => {
+			seek(e);
+			chart.setPointerCapture(e.pointerId);
+		});
+		chart.addEventListener("pointermove", (e) => {
+			if (chart.hasPointerCapture(e.pointerId)) seek(e);
+		});
+
+		let visible = false;
+		new IntersectionObserver(([entry]) => {
+			visible = entry.isIntersecting;
+		}).observe(root);
+		setInterval(() => {
+			if (!playing || !visible) return;
+			second = (second + 1) % n;
+			tick();
+		}, STEP_MS);
+		draw();
+	}
+
+	for (const root of document.querySelectorAll<HTMLElement>("[data-drive]")) mount(root);
+</script>

@@ -1,0 +1,39 @@
+---
+import Section from "@voila.dev/site/components/Section.astro";
+import Budget from "../components/Budget.astro";
+import Cta from "../components/Cta.astro";
+import Drive from "../components/Drive.astro";
+import Footer from "../components/Footer.astro";
+import Top from "../components/Top.astro";
+import Base from "../layouts/Base.astro";
+---
+
+<Base
+	title="freewheel demos · three SIMs on a real drive"
+	description="Replay 100 seconds of three recorded LTE uplinks from a moving car: pick SIMs and a bitrate, see when the stream freezes on one network and when it holds on all of them. And how much data a live uses."
+>
+	<div class="in">
+		<Top />
+		<header class="phero solo"><h1>Demos</h1></header>
+		<div class="pintro">
+			<p>Real networks, in your browser.</p>
+			<div><span class="k">Data</span>Recorded LTE uplinks, moving car</div>
+			<div><span class="k">On a bike</span>Filmed demos come with the box</div>
+		</div>
+	</div>
+
+	<main class="in">
+		<Section id="drive" title="The drive" tag="Three SIMs, 100 s">
+			<p class="claim lead">One network freezes. Three hold.</p>
+			<Drive />
+		</Section>
+
+		<Section id="data" title="Data" tag="Bitrate × time">
+			<p class="claim lead">What a live costs your plans.</p>
+			<Budget />
+		</Section>
+
+		<Cta />
+	</main>
+	<div class="in"><Footer /></div>
+</Base>

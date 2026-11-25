@@ -1,0 +1,181 @@
+---
+// Hero animation: two SIMs feed one live stream. A toggle compares BELABOX (the stream freezes when a SIM
+// drops, the SIM that comes back stays unused) with freewheel (no freeze). SVG + SMIL, a few lines of JS.
+
+type Mode = "belabox" | "freewheel";
+type Layout = {
+	name: "wide" | "compact";
+	w: number;
+	h: number;
+	y1: number;
+	y2: number;
+	start: number;
+	bend: number;
+	node: number;
+	size: number;
+	end: number;
+	label: number;
+	warnX: number;
+};
+
+const layouts: Layout[] = [
+	{
+		name: "wide",
+		w: 1200,
+		h: 220,
+		y1: 50,
+		y2: 170,
+		start: 150,
+		bend: 520,
+		node: 820,
+		size: 80,
+		end: 1020,
+		label: 20,
+		warnX: 260,
+	},
+	{
+		name: "compact",
+		w: 600,
+		h: 250,
+		y1: 50,
+		y2: 200,
+		start: 120,
+		bend: 170,
+		node: 330,
+		size: 70,
+		end: 440,
+		label: 24,
+		warnX: 150,
+	},
+];
+const modes: Mode[] = ["freewheel", "belabox"];
+
+const cycle = "8s";
+const loop = { dur: cycle, repeatCount: "indefinite" };
+// One 8 s cycle: SIM 2 drops at 50 %, comes back at 82 %.
+const drop = { keyTimes: "0;0.5;0.53;0.82;0.85;1" };
+// BELABOX: the stream freezes for ~1.6 s at the drop, the returning SIM stays unused until 97 %.
+const freeze = { keyTimes: "0;0.5;0.52;0.72;0.74;1" };
+const slowReturn = { keyTimes: "0;0.5;0.53;0.94;0.97;1" };
+
+const ink = "#0c0c0e";
+const volt = "#2633ff";
+const red = "#e5484d";
+const grey = "#b9b9b4";
+
+function geometry(l: Layout) {
+	const mid = (l.y1 + l.y2) / 2;
+	const c = (l.bend + l.node) / 2;
+	const lane = (y: number) =>
+		`M${l.start} ${y} H${l.bend} C${c} ${y} ${c} ${mid} ${l.node} ${mid}`;
+	return {
+		mid,
+		l1: lane(l.y1),
+		l2: lane(l.y2),
+		out: `M${l.node + l.size} ${mid} H${l.end}`,
+	};
+}
+// Packet start offsets as fractions of the trip: irregular, and different per SIM, like real links.
+const begins = (dur: number, offsets: number[]) =>
+	offsets.map((o) => `-${(dur * o).toFixed(2)}s`);
+const sim1 = { dur: 2.6, offsets: [0, 0.13, 0.31, 0.42, 0.6, 0.71, 0.88] };
+const sim2 = { dur: 3.3, offsets: [0.07, 0.24, 0.5, 0.66, 0.93] };
+const live = { dur: 1.2, offsets: [0, 0.2, 0.4, 0.6, 0.8] };
+---
+
+<div class="flow" data-mode="freewheel">
+	<div class="switch" role="group" aria-label="Compare">
+		<button type="button" data-set="belabox" aria-pressed="false">BELABOX</button>
+		<button type="button" data-set="freewheel" aria-pressed="true">freewheel</button>
+	</div>
+	{
+		layouts.map((l) => {
+			const g = geometry(l);
+			return modes.map((m) => {
+				const id = `${l.name}-${m}`;
+				const fw = m === "freewheel";
+				return (
+					<svg class:list={["scene", l.name, m]} viewBox={`0 0 ${l.w} ${l.h}`} preserveAspectRatio="xMinYMid meet" aria-hidden="true">
+						<defs>
+							<path id={`${id}-l1`} d={g.l1} />
+							<path id={`${id}-l2`} d={g.l2} />
+							<path id={`${id}-out`} d={g.out} />
+						</defs>
+						<use href={`#${id}-l1`} class="lane">
+							{fw && <animate attributeName="stroke" values={`${ink};${ink};${volt};${volt};${ink};${ink}`} {...drop} {...loop} />}
+							{fw && <animate attributeName="stroke-width" values="2;2;4;4;2;2" {...drop} {...loop} />}
+						</use>
+						<use href={`#${id}-l2`} class="lane">
+							<animate attributeName="stroke-opacity" values="1;1;0.15;0.15;1;1" {...(fw ? drop : slowReturn)} {...loop} />
+						</use>
+						<use href={`#${id}-out`} class="lane main" />
+
+						<text class="lbl" x="0" y={l.y1 + 7}>SIM 1</text>
+						<text class="lbl" x="0" y={l.y2 + 7}>SIM 2</text>
+						<text class="lbl warn" x={l.warnX} y={l.y2 - 20} opacity="0">
+							NO SIGNAL
+							<animate attributeName="opacity" values="0;0;1;1;0;0" {...drop} {...loop} />
+						</text>
+
+						{begins(sim1.dur, sim1.offsets).map((begin) => (
+							<rect class="pk" x="-8" y="-4" width="16" height="8">
+								<animateMotion begin={begin} dur={`${sim1.dur}s`} repeatCount="indefinite" rotate="auto">
+									<mpath href={`#${id}-l1`} />
+								</animateMotion>
+							</rect>
+						))}
+						{begins(sim2.dur, sim2.offsets).map((begin) => (
+							<rect class="pk" x="-8" y="-4" width="16" height="8">
+								<animate attributeName="opacity" values="1;1;0;0;1;1" {...(fw ? drop : slowReturn)} {...loop} />
+								<animateMotion begin={begin} dur={`${sim2.dur}s`} repeatCount="indefinite" rotate="auto">
+									<mpath href={`#${id}-l2`} />
+								</animateMotion>
+							</rect>
+						))}
+						{begins(live.dur, live.offsets).map((begin) => (
+							<rect class="pk" x="-8" y="-4" width="16" height="8">
+								{!fw && <animate attributeName="opacity" values="1;1;0;0;1;1" {...freeze} {...loop} />}
+								<animateMotion begin={begin} dur={`${live.dur}s`} repeatCount="indefinite" rotate="auto">
+									<mpath href={`#${id}-out`} />
+								</animateMotion>
+							</rect>
+						))}
+
+						<rect class="node" x={l.node} y={g.mid - l.size / 2} width={l.size} height={l.size} rx={l.size / 4} />
+						<image href="/favicon.svg" x={l.node + l.size * 0.2} y={g.mid - l.size * 0.3} width={l.size * 0.6} height={l.size * 0.6} />
+
+						<circle class="live-dot" cx={l.end + 22} cy={g.mid} r="7">
+							{!fw && <animate attributeName="fill" values={`${red};${red};${grey};${grey};${red};${red}`} {...freeze} {...loop} />}
+							<animate attributeName="opacity" values="1;0.25;1" dur="1.4s" repeatCount="indefinite" />
+						</circle>
+						<text class="lbl live" x={l.end + 38} y={g.mid + 9}>LIVE</text>
+						{fw ? (
+							<text class="lbl state ok" x={l.end + 38} y={g.mid + 40}>no freeze</text>
+						) : (
+							<text class="lbl state bad" x={l.end + 38} y={g.mid + 40} opacity="0">
+								FROZEN
+								<animate attributeName="opacity" values="0;0;1;1;0;0" {...freeze} {...loop} />
+							</text>
+						)}
+					</svg>
+				);
+			});
+		})
+	}
+</div>
+
+<script>
+	// Toggle BELABOX / freewheel, and jump just before the drop so the difference shows right away.
+	const flow = document.querySelector<HTMLElement>(".flow");
+	const scenes = [...document.querySelectorAll<SVGSVGElement>(".flow svg")];
+	const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+	if (reduced) for (const svg of scenes) svg.pauseAnimations();
+	for (const button of document.querySelectorAll<HTMLButtonElement>(".flow [data-set]")) {
+		button.addEventListener("click", () => {
+			if (!flow) return;
+			flow.dataset.mode = button.dataset.set;
+			for (const b of document.querySelectorAll<HTMLButtonElement>(".flow [data-set]")) b.setAttribute("aria-pressed", String(b === button));
+			for (const svg of scenes) svg.setCurrentTime(3);
+		});
+	}
+</script>

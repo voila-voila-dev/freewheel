@@ -1,0 +1,71 @@
+name: site
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/freewheel.voila.dev/**"
+      - "docs/**"
+      - ".github/workflows/site.yml"
+  pull_request:
+    paths:
+      - "apps/freewheel.voila.dev/**"
+      - "docs/**"
+      - ".github/workflows/site.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: site-${{ github.event.pull_request.number || 'main' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  site:
+    runs-on: ubuntu-latest
+    # Forks get no secrets: no preview for them.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # The site has its own install, outside the root workspaces; its docs are read from docs/.
+      - run: bun install --frozen-lockfile
+        working-directory: apps/freewheel.voila.dev
+      - run: bun run build
+        working-directory: apps/freewheel.voila.dev
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - if: github.event_name != 'pull_request'
+        uses: voila-voila-dev/.github/actions/cloudflare-workers-publish@main
+        with:
+          command: deploy
+          working-directory: apps/freewheel.voila.dev
+          api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - if: github.event_name == 'pull_request'
+        id: preview
+        uses: voila-voila-dev/.github/actions/cloudflare-workers-publish@main
+        with:
+          command: versions upload --message "PR #${{ github.event.pull_request.number }}"
+          working-directory: apps/freewheel.voila.dev
+          api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - if: github.event_name == 'pull_request'
+        uses: voila-voila-dev/.github/actions/sticky-pr-comment@main
+        with:
+          id: cloudflare-preview
+          body: |
+            ### freewheel.voila.dev preview
+
+            | Field | Value |
+            | --- | --- |
+            | **Preview URL** | ${{ steps.preview.outputs.deployment-url }} |
+            | **Commit** | `${{ github.event.pull_request.head.sha }}` |

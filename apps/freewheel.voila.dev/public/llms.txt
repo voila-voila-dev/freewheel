@@ -1,0 +1,16 @@
+# freewheel
+
+> freewheel is open-source (MIT) mobile live streaming: it bonds several cellular links into one stream. Written from scratch in Rust, wire-compatible with BELABOX's SRTLA, with its own transport on top. Built by VOILA DEVELOPMENT (https://voila.dev).
+
+## Benchmark
+- On recorded LTE uplinks from a moving car (`trace-drive`, 3 links), freewheel's transport loses about 530 frames out of ~2,700, against about 1,750 for upstream SRTLA and 1,950 for irlserver/srtla_send. Median of 3 CI runs on an ARM64 runner.
+- Method and raw results: https://github.com/voila-voila-dev/freewheel/blob/main/bench/README.md
+
+## Status
+- Runs in emulation and CI only. No hardware demo yet.
+
+## Links
+- Docs (guide, architecture, protocols, research): https://freewheel.voila.dev/docs
+- Demos (a recorded drive, three SIMs; data use): https://freewheel.voila.dev/demos
+- Code: https://github.com/voila-voila-dev/freewheel
+- Contact: emilien@voila.dev
